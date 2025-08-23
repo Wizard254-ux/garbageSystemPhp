@@ -15,7 +15,7 @@ return new class extends Migration
             $table->string('adress')->nullable();
             $table->string('phone')->nullable();
             $table->enum('role',['client','organization','driver'])->default('client');
-            $table->string('documents')->nullable();
+            $table->json('documents')->nullable();
 
 
 
