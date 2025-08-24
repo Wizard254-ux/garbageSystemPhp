@@ -2,21 +2,23 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\Bag;
 use App\Models\BagIssue;
+use App\Models\DriverBagsAllocation;
+use App\Models\User;
+use App\Models\ActivityLog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\DB;
 
 class BagIssueController extends Controller
 {
     public function requestOtp(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'bag_id' => 'required|exists:bags,id',
+            'client_id' => 'required|exists:users,id',
             'client_email' => 'required|email',
-            'number_of_bags_issued' => 'required|integer|min:1'
+            'number_of_bags' => 'required|integer|min:1'
         ]);
 
         if ($validator->fails()) {
@@ -30,50 +32,55 @@ class BagIssueController extends Controller
             ], 401);
         }
 
-        // Verify bag belongs to driver's organization
-        $bag = Bag::find($request->bag_id);
-        $driver = $request->user();
+        $driverId = $request->user()->id;
         
-        if ($bag->organization_id !== $driver->organization_id) {
+        // Check if client belongs to driver's organization using clients table
+        $client = \App\Models\Client::where('user_id', $request->client_id)
+            ->where('organization_id', $request->user()->organization_id)
+            ->first();
+
+        if (!$client) {
             return response()->json([
                 'status' => false,
-                'error' => 'Unauthorized',
-                'message' => 'You cannot issue bags from this organization'
-            ], 403);
+                'error' => 'Invalid client',
+                'message' => 'Client not found or does not belong to your organization'
+            ], 404);
         }
 
-        // Check if bag has enough quantity
-        $totalIssued = BagIssue::where('bag_id', $request->bag_id)
-            ->where('is_verified', true)
-            ->sum('number_of_bags_issued');
-            
-        if (($totalIssued + $request->number_of_bags_issued) > $bag->number_of_bags) {
+        if (!$client) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Invalid client',
+                'message' => 'Client not found or does not belong to your organization'
+            ], 404);
+        }
+
+        // Check driver's bag allocation
+        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+
+        if (!$allocation || $allocation->available_bags < $request->number_of_bags) {
             return response()->json([
                 'status' => false,
                 'error' => 'Insufficient bags',
-                'message' => 'Not enough bags available for issuing'
+                'message' => 'You do not have enough bags to issue'
             ], 400);
         }
 
         // Generate OTP
         $otpCode = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         
-        // Create or update bag issue record
-        $bagIssue = BagIssue::updateOrCreate(
-            [
-                'bag_id' => $request->bag_id,
-                'client_email' => $request->client_email,
-                'driver_id' => $driver->id,
-                'is_verified' => false
-            ],
-            [
-                'number_of_bags_issued' => $request->number_of_bags_issued,
-                'otp_code' => $otpCode,
-                'otp_expires_at' => now()->addMinutes(10)
-            ]
-        );
+        // Create bag issue record
+        $bagIssue = BagIssue::create([
+            'driver_id' => $driverId,
+            'client_id' => $request->client_id,
+            'client_email' => $request->client_email,
+            'number_of_bags_issued' => $request->number_of_bags,
+            'otp_code' => $otpCode,
+            'otp_expires_at' => now()->addMinutes(10),
+            'is_verified' => false
+        ]);
 
-        // Send OTP via email (you'll need to create the mail class)
+        // Send OTP via email
         try {
             Mail::raw("Your OTP for bag collection is: {$otpCode}. This code expires in 10 minutes.", function($message) use ($request) {
                 $message->to($request->client_email)
@@ -150,17 +157,41 @@ class BagIssueController extends Controller
             ], 400);
         }
 
-        // Mark as verified and set issued time
-        $bagIssue->update([
-            'is_verified' => true,
-            'issued_at' => now()
-        ]);
+        // Process the bag issue
+        DB::transaction(function () use ($bagIssue, $request) {
+            // Update driver allocation
+            $allocation = DriverBagsAllocation::where('driver_id', $request->user()->id)->first();
+            $allocation->decrement('available_bags', $bagIssue->number_of_bags_issued);
+            $allocation->increment('used_bags', $bagIssue->number_of_bags_issued);
+
+            // Mark as verified and set issued time
+            $bagIssue->update([
+                'is_verified' => true,
+                'issued_at' => now()
+            ]);
+
+            // Log the activity
+            $client = User::find($bagIssue->client_id);
+            ActivityLog::create([
+                'user_id' => $request->user()->id,
+                'action' => 'bags_issued',
+                'description' => "{$request->user()->name} issued {$bagIssue->number_of_bags_issued} bags to client {$client->name}",
+                'reason' => null,
+                'data' => [
+                    'bags_issued' => $bagIssue->number_of_bags_issued,
+                    'client_id' => $bagIssue->client_id,
+                    'client_name' => $client->name,
+                    'client_email' => $bagIssue->client_email,
+                    'driver_remaining' => $allocation->fresh()->available_bags
+                ]
+            ]);
+        });
 
         return response()->json([
             'status' => true,
             'message' => 'Bags issued successfully',
             'data' => [
-                'bag_issue' => $bagIssue->load(['bag', 'driver:id,name'])
+                'bag_issue' => $bagIssue->fresh()->load(['driver:id,name', 'client:id,name'])
             ]
         ], 200);
     }
@@ -169,10 +200,10 @@ class BagIssueController extends Controller
     {
         $organizationId = $request->user()->id;
         
-        $bagIssues = BagIssue::whereHas('bag', function($query) use ($organizationId) {
+        $bagIssues = BagIssue::whereHas('driver', function($query) use ($organizationId) {
                 $query->where('organization_id', $organizationId);
             })
-            ->with(['bag', 'driver:id,name'])
+            ->with(['driver:id,name', 'client:id,name'])
             ->orderBy('created_at', 'desc')
             ->get();
 

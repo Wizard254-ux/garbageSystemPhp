@@ -8,9 +8,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class BagIssue extends Model
 {
     protected $fillable = [
-        'bag_id',
-        'client_email',
         'driver_id',
+        'client_id',
+        'client_email',
         'number_of_bags_issued',
         'otp_code',
         'otp_expires_at',
@@ -24,9 +24,9 @@ class BagIssue extends Model
         'is_verified' => 'boolean'
     ];
 
-    public function bag(): BelongsTo
+    public function client(): BelongsTo
     {
-        return $this->belongsTo(Bag::class);
+        return $this->belongsTo(User::class, 'client_id');
     }
 
     public function driver(): BelongsTo

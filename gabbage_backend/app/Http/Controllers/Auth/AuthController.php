@@ -634,7 +634,23 @@ class AuthController extends Controller
             ], 404);
         }
 
+        // Check if driver has allocated bags
+        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        if ($allocation && $allocation->available_bags > 0) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Cannot delete driver',
+                'message' => 'Driver has pending allocated bags. Please clear all bags before deletion.',
+                'data' => ['pending_bags' => $allocation->available_bags]
+            ], 400);
+        }
+
         $driver->delete();
+        
+        // Clean up allocation record if exists
+        if ($allocation) {
+            $allocation->delete();
+        }
 
         return response()->json([
             'status' => true,

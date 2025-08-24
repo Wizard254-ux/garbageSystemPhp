@@ -1,0 +1,272 @@
+{
+	"info": {
+		"name": "Bags Management API Collection",
+		"description": "Complete collection for the restructured bag management system",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://127.0.0.1:8000/api"
+		},
+		{
+			"key": "auth_token",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"organization@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "login"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Organization Bag Management",
+			"item": [
+				{
+					"name": "Get Organization Bags Overview",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags"]
+						}
+					}
+				},
+				{
+					"name": "Add Bags to Inventory",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"number_of_bags\": 100\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/add",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "add"]
+						}
+					}
+				},
+				{
+					"name": "Remove Bags (Damaged/Spoilt)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"number_of_bags\": 5,\n  \"reason\": \"Damaged during transport\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/remove",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "remove"]
+						}
+					}
+				},
+				{
+					"name": "Allocate Bags to Driver",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"driver_id\": 5,\n  \"number_of_bags\": 20\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/allocate",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "allocate"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Driver Bag Management",
+			"item": [
+				{
+					"name": "Get Driver Bags",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/driver/bags",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags"]
+						}
+					}
+				},
+				{
+					"name": "Return Bags to Organization",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"number_of_bags\": 5\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/bags/return",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags", "return"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Bag Issuing (Driver to Client)",
+			"item": [
+
+				{
+					"name": "Request OTP for Bag Issue (Driver)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"client_id\": 3,\n  \"client_email\": \"client@example.com\",\n  \"number_of_bags\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/bags/issue/request",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags", "issue", "request"]
+						}
+					}
+				},
+				{
+					"name": "Verify OTP for Bag Issue (Driver)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bag_issue_id\": 1,\n  \"otp_code\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/bags/issue/verify",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags", "issue", "verify"]
+						}
+					}
+				},
+				{
+					"name": "Get Bag Issues List",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags/issues/list",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "issues", "list"]
+						}
+					}
+				}
+			]
+		}
+	]
+}

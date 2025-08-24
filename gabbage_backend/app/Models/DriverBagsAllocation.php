@@ -4,14 +4,14 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class Bag extends Model
+class DriverBagsAllocation extends Model
 {
     protected $fillable = [
         'organization_id',
-        'total_bags',
+        'driver_id',
         'allocated_bags',
+        'used_bags',
         'available_bags'
     ];
 
@@ -20,13 +20,8 @@ class Bag extends Model
         return $this->belongsTo(User::class, 'organization_id');
     }
 
-    public function driverAllocations(): HasMany
+    public function driver(): BelongsTo
     {
-        return $this->hasMany(DriverBagsAllocation::class, 'organization_id', 'organization_id');
-    }
-
-    public function bagIssues(): HasMany
-    {
-        return $this->hasMany(BagIssue::class);
+        return $this->belongsTo(User::class, 'driver_id');
     }
 }
