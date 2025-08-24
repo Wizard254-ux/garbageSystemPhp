@@ -5,6 +5,8 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\RouteController;
 use App\Http\Controllers\ClientController;
+use App\Http\Controllers\BagController;
+use App\Http\Controllers\BagIssueController;
 
 
 
@@ -105,9 +107,24 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     
     // Bags management
     Route::prefix('bags')->group(function () {
-        Route::get('/', [AuthController::class, 'listOrganizationBags']);
-        Route::post('/distribute', [AuthController::class, 'distributeBags']);
-        Route::post('/verify', [AuthController::class, 'verifyBagDistribution']);
+        Route::get('/', [BagController::class, 'index']);
+        Route::post('/', [BagController::class, 'store']);
+        Route::get('/{id}', [BagController::class, 'show']);
+        Route::put('/{id}', [BagController::class, 'update']);
+        Route::delete('/{id}', [BagController::class, 'destroy']);
+        
+        // Bag issuing with OTP
+        Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
+        Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
+        Route::get('/issues/list', [BagIssueController::class, 'index']);
+    });
+});
+
+// Driver routes (for bag issuing)
+Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
+    Route::prefix('bags')->group(function () {
+        Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
+        Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
     });
 });
 

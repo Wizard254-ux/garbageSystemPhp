@@ -12,7 +12,9 @@ return new class extends Migration
      */
     public function up(): void
     {
-        DB::statement("ALTER TABLE users MODIFY COLUMN role ENUM('client','organization','driver','admin') DEFAULT 'client'");
+        // SQLite doesn't support ENUM or MODIFY COLUMN
+        // The role column should already exist from the users table creation
+        // This migration is essentially a no-op for SQLite
     }
 
     /**
@@ -20,6 +22,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        DB::statement("ALTER TABLE users MODIFY COLUMN role ENUM('client','organization','driver') DEFAULT 'client'");
+        // No action needed for SQLite
     }
 };

@@ -17,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
         'file.uploads' => \App\Http\Middleware\HandleFileUploads::class,
         'admin.only' => \App\Http\Middleware\AdminOnly::class,
         'organization.only' => \App\Http\Middleware\OrganizationOnly::class,
+        'driver.only' => \App\Http\Middleware\DriverOnly::class,
     ]);
         
         // Configure API authentication to return JSON
