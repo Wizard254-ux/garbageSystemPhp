@@ -16,15 +16,24 @@ class HandleFileUploads
     public function handle(Request $request, Closure $next): Response
     {
         // Add logging to debug
+         \Log::info('HandleFileUploads middleware executed');
+        \Log::info('Request files:', $request->allFiles());
         Log::info('HandleFileUploads middleware triggered');
 
         if ($request->hasFile('documents')) {
-            Log::info('Files found in request', ['file_count' => count($request->file('documents'))]);
+            $files = $request->file('documents');
+            
+            // Handle both single file and array of files
+            if (!is_array($files)) {
+                $files = [$files];
+            }
+            
+            Log::info('Files found in request', ['file_count' => count($files)]);
             
             $filePaths = []; // initialize array
 
             try {
-                foreach ($request->file('documents') as $file) {
+                foreach ($files as $file) {
                     // Check if file is valid
                     if (!$file->isValid()) {
                         return response()->json([
@@ -37,10 +46,10 @@ class HandleFileUploads
                     $extension = strtolower($file->getClientOriginalExtension());
                     
                     // Validate file type
-                    if (!in_array($extension, ['pdf', 'jpg', 'png', 'jpeg'])) {
+                    if (!in_array($extension, ['pdf', 'jpg', 'png', 'jpeg', 'docx'])) {
                         return response()->json([
                             'status' => false,
-                            'message' => "Invalid file type: {$extension}. Only PDF, JPG, PNG, and JPEG are allowed."
+                            'message' => "Invalid file type: {$extension}. Only PDF, JPG, PNG, JPEG, and DOCX are allowed."
                         ], 400);
                     }
 
@@ -62,8 +71,9 @@ class HandleFileUploads
                         ], 500);
                     }
 
-                    // Get the full URL
-                    $fullUrl = url(Storage::url($filePath));
+                    // Get the authenticated URL
+                    $filename = basename($filePath);
+                    $fullUrl = url('/api/storage/documents/' . $filename);
                     $filePaths[] = $fullUrl;
                     
                     Log::info('File stored successfully', [

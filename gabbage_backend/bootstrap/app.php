@@ -15,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
         //
         $middleware->alias([
         'file.uploads' => \App\Http\Middleware\HandleFileUploads::class,
+        'admin.only' => \App\Http\Middleware\AdminOnly::class,
     ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
