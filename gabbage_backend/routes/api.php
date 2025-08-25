@@ -7,6 +7,8 @@ use App\Http\Controllers\RouteController;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\BagController;
 use App\Http\Controllers\BagIssueController;
+use App\Http\Controllers\InvoiceController;
+use App\Http\Controllers\PaymentController;
 
 
 
@@ -76,8 +78,9 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::post('/{id}', [ClientController::class, 'update'])->middleware('file.uploads'); // For method spoofing
         Route::delete('/{id}', [ClientController::class, 'destroy']);
         Route::delete('/{id}/documents', [ClientController::class, 'deleteDocument']);
-        Route::get('/{id}/payments', [AuthController::class, 'getClientPayments']);
-        Route::get('/{id}/invoices', [AuthController::class, 'getClientInvoices']);
+        Route::get('/{id}/payments', [PaymentController::class, 'getClientPayments']);
+        Route::get('/{id}/invoices', [InvoiceController::class, 'getClientInvoices']);
+        Route::get('/{id}/pickups', [\App\Http\Controllers\PickupController::class, 'getClientPickups']);
         Route::get('/{id}/bags', [AuthController::class, 'getClientBagHistory']);
     });
     
@@ -92,17 +95,17 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     
     // Payments management
     Route::prefix('payments')->group(function () {
-        Route::get('/', [AuthController::class, 'listOrganizationPayments']);
-        Route::post('/', [AuthController::class, 'processPayment']);
-        Route::get('/{id}', [AuthController::class, 'getPaymentDetails']);
+        Route::get('/', [PaymentController::class, 'index']);
+        Route::post('/cash', [PaymentController::class, 'createCashPayment']);
+        Route::get('/{id}', [PaymentController::class, 'show']);
     });
     
     // Invoices management
     Route::prefix('invoices')->group(function () {
-        Route::get('/', [AuthController::class, 'listOrganizationInvoices']);
-        Route::post('/', [AuthController::class, 'createInvoice']);
-        Route::get('/{id}', [AuthController::class, 'getInvoiceDetails']);
-        Route::put('/{id}', [AuthController::class, 'updateInvoice']);
+        Route::get('/', [InvoiceController::class, 'index']);
+        Route::post('/', [InvoiceController::class, 'store']);
+        Route::get('/{id}', [InvoiceController::class, 'show']);
+        Route::post('/resend', [InvoiceController::class, 'resendInvoices']);
     });
     
     // Bags management
@@ -118,15 +121,36 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
         Route::get('/issues/list', [BagIssueController::class, 'index']);
     });
+    
+    // Pickups management
+    Route::prefix('pickups')->group(function () {
+        Route::get('/', [\App\Http\Controllers\PickupController::class, 'getPickups']);
+        Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getClientsToPickup']);
+    });
 });
 
-// Driver routes (for bag issuing)
+// Driver routes (for bag issuing and pickups)
 Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
     Route::prefix('bags')->group(function () {
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
         Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
     });
+    
+    Route::prefix('pickups')->group(function () {
+        Route::post('/mark', [\App\Http\Controllers\PickupController::class, 'markPickup']);
+        Route::get('/', [\App\Http\Controllers\PickupController::class, 'getPickups']);
+        Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getClientsToPickup']);
+    });
+    
+    Route::prefix('routes')->group(function () {
+        Route::post('/activate', [\App\Http\Controllers\PickupController::class, 'activateRoute']);
+        Route::post('/deactivate', [\App\Http\Controllers\PickupController::class, 'deactivateRoute']);
+        Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);
+    });
 });
+
+// M-Pesa Callback (no auth required)
+Route::post('/mpesa/callback', [PaymentController::class, 'mpesaCallback']);
 
 // Admin routes
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin.only'])->group(function () {

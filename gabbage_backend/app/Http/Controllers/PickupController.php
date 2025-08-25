@@ -1,0 +1,735 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Pickup;
+use App\Models\Client;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
+use Carbon\Carbon;
+
+class PickupController extends Controller
+{
+    public function markPickup(Request $request)
+    {
+        \Log::info('=== DRIVER PICKUP START ===');
+        \Log::info('Request data:', $request->all());
+        \Log::info('Driver ID:', ['driver_id' => $request->user()->id]);
+
+        $validator = Validator::make($request->all(), [
+            'client_id' => 'required|exists:users,id'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+
+        try {
+            $driverId = $request->user()->id;
+            $clientId = $request->client_id;
+            $today = Carbon::now();
+            $weekStart = $today->copy()->startOfWeek();
+            $weekEnd = $today->copy()->endOfWeek();
+
+            \Log::info('Pickup parameters:', [
+                'driver_id' => $driverId,
+                'client_id' => $clientId,
+                'pickup_date' => $today->toDateString(),
+                'week_start' => $weekStart->toDateString(),
+                'week_end' => $weekEnd->toDateString()
+            ]);
+
+            // Get client details
+            $client = Client::where('user_id', $clientId)->first();
+            if (!$client) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Client not found',
+                    'message' => 'Client record not found'
+                ], 404);
+            }
+
+            \Log::info('Client found:', [
+                'client_id' => $client->id,
+                'route_id' => $client->route_id
+            ]);
+
+            // Check if pickup already exists for this week
+            $existingPickup = Pickup::where('client_id', $clientId)
+                ->whereBetween('pickup_date', [$weekStart, $weekEnd])
+                ->first();
+
+            if ($existingPickup) {
+                if ($existingPickup->pickup_status === 'picked') {
+                    \Log::warning('Client already picked this week:', [
+                        'pickup_id' => $existingPickup->id,
+                        'picked_at' => $existingPickup->picked_at
+                    ]);
+                    return response()->json([
+                        'status' => false,
+                        'error' => 'Already picked',
+                        'message' => 'Client has already been picked up this week'
+                    ], 400);
+                }
+
+                // Update existing pickup
+                $existingPickup->update([
+                    'driver_id' => $driverId,
+                    'pickup_status' => 'picked',
+                    'pickup_date' => $today->toDateString(),
+                    'picked_at' => $today
+                ]);
+
+                \Log::info('Updated existing pickup:', [
+                    'pickup_id' => $existingPickup->id,
+                    'status' => 'picked'
+                ]);
+
+                // Send pickup completion email to client
+                try {
+                    \Log::info('Sending pickup completion email to client:', ['email' => $existingPickup->client->email]);
+                    \Mail::to($existingPickup->client->email)->send(new \App\Mail\PickupCompleted($existingPickup->load(['client', 'driver', 'route'])));
+                    \Log::info('Pickup completion email sent successfully');
+                } catch (\Exception $e) {
+                    \Log::error('Failed to send pickup completion email:', [
+                        'error' => $e->getMessage(),
+                        'client_email' => $existingPickup->client->email
+                    ]);
+                }
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Pickup completed successfully',
+                    'data' => ['pickup' => $existingPickup->fresh()]
+                ], 200);
+            }
+
+            // Create new pickup record
+            $pickup = Pickup::create([
+                'client_id' => $clientId,
+                'route_id' => $client->route_id,
+                'driver_id' => $driverId,
+                'pickup_status' => 'picked',
+                'pickup_date' => $today->toDateString(),
+                'picked_at' => $today
+            ]);
+
+            \Log::info('Created new pickup:', [
+                'pickup_id' => $pickup->id,
+                'client_id' => $clientId,
+                'driver_id' => $driverId,
+                'pickup_date' => $pickup->pickup_date
+            ]);
+
+            // Send pickup completion email to client
+            try {
+                \Log::info('Sending pickup completion email to client:', ['email' => $pickup->client->email]);
+                \Mail::to($pickup->client->email)->send(new \App\Mail\PickupCompleted($pickup->load(['client', 'driver', 'route'])));
+                \Log::info('Pickup completion email sent successfully');
+            } catch (\Exception $e) {
+                \Log::error('Failed to send pickup completion email:', [
+                    'error' => $e->getMessage(),
+                    'client_email' => $pickup->client->email
+                ]);
+            }
+
+            \Log::info('=== DRIVER PICKUP END - SUCCESS ===');
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Pickup completed successfully',
+                'data' => ['pickup' => $pickup->load(['client', 'route'])]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Pickup failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Pickup failed',
+                'message' => 'Failed to record pickup: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function getPickups(Request $request)
+    {
+        \Log::info('=== GET PICKUPS START ===');
+        \Log::info('Request params:', $request->all());
+        
+        $validator = Validator::make($request->all(), [
+            'date' => 'nullable|date',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
+            'status' => 'nullable|in:picked,unpicked,skipped',
+            'week' => 'nullable|in:current,this'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+
+        try {
+            $today = Carbon::now()->toDateString();
+            $requestedDate = $request->date ?? $today;
+            $startDate = $request->start_date;
+            $endDate = $request->end_date;
+            $status = $request->status;
+            $week = $request->week;
+            
+            // Handle week filter
+            if ($week === 'current' || $week === 'this') {
+                $weekStart = Carbon::now()->startOfWeek()->toDateString();
+                $weekEnd = Carbon::now()->endOfWeek()->toDateString();
+                $startDate = $weekStart;
+                $endDate = $weekEnd;
+                \Log::info('Week filter applied:', ['week_start' => $weekStart, 'week_end' => $weekEnd]);
+            }
+            
+            \Log::info('Pickup query parameters:', [
+                'today' => $today,
+                'requested_date' => $requestedDate,
+                'start_date' => $startDate,
+                'end_date' => $endDate,
+                'status' => $status
+            ]);
+
+            // For today's unpicked or week filter - check clients who should be picked but aren't in pickup table
+            if (($requestedDate === $today && (!$status || $status === 'unpicked')) || ($week && $status === 'unpicked')) {
+                \Log::info('Getting unpicked clients...');
+                $unpickedClients = $week ? $this->getWeekUnpickedClients() : $this->getTodaysUnpickedClients();
+                
+                if (!$status) {
+                    // Get picked from pickup table for today or week
+                    $pickedQuery = Pickup::with(['client', 'route', 'driver'])
+                        ->where('pickup_status', 'picked');
+                    
+                    if ($week) {
+                        $pickedQuery->whereBetween('pickup_date', [$weekStart, $weekEnd]);
+                    } else {
+                        $pickedQuery->where('pickup_date', $today);
+                    }
+                    
+                    $pickedToday = $pickedQuery->get();
+                    
+                    return response()->json([
+                        'status' => true,
+                        'data' => [
+                            'picked' => $pickedToday,
+                            'unpicked' => $unpickedClients,
+                            'date' => $today
+                        ]
+                    ], 200);
+                } else {
+                    return response()->json([
+                        'status' => true,
+                        'data' => [
+                            'pickups' => $unpickedClients,
+                            'date' => $today
+                        ]
+                    ], 200);
+                }
+            }
+
+            // For other dates or specific status, query pickup table
+            $query = Pickup::with(['client', 'route', 'driver']);
+
+            if ($startDate && $endDate) {
+                $query->whereBetween('pickup_date', [$startDate, $endDate]);
+            } elseif ($requestedDate) {
+                $query->where('pickup_date', $requestedDate);
+            }
+
+            if ($status) {
+                $query->where('pickup_status', $status);
+            }
+
+            $pickups = $query->orderBy('pickup_date', 'desc')->get();
+
+            \Log::info('Pickups found:', ['count' => $pickups->count()]);
+
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'pickups' => $pickups,
+                    'filters' => [
+                        'date' => $requestedDate,
+                        'start_date' => $startDate,
+                        'end_date' => $endDate,
+                        'status' => $status
+                    ]
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Get pickups failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get pickups',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function getClientsToPickup(Request $request)
+    {
+        \Log::info('=== GET CLIENTS TO PICKUP START ===');
+        
+        $validator = Validator::make($request->all(), [
+            'date' => 'nullable|date',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+
+        try {
+            $today = Carbon::now();
+            $requestedDate = $request->date ? Carbon::parse($request->date) : $today;
+            $startDate = $request->start_date ? Carbon::parse($request->start_date) : null;
+            $endDate = $request->end_date ? Carbon::parse($request->end_date) : null;
+            
+            \Log::info('Client pickup query:', [
+                'requested_date' => $requestedDate->toDateString(),
+                'start_date' => $startDate?->toDateString(),
+                'end_date' => $endDate?->toDateString()
+            ]);
+
+            if ($startDate && $endDate) {
+                // Date range query
+                $clients = [];
+                $currentDate = $startDate->copy();
+                
+                while ($currentDate->lte($endDate)) {
+                    $dayClients = $this->getClientsForDate($currentDate);
+                    $clients[$currentDate->toDateString()] = $dayClients;
+                    $currentDate->addDay();
+                }
+                
+                return response()->json([
+                    'status' => true,
+                    'data' => [
+                        'clients_by_date' => $clients,
+                        'date_range' => [
+                            'start' => $startDate->toDateString(),
+                            'end' => $endDate->toDateString()
+                        ]
+                    ]
+                ], 200);
+            } else {
+                // Single date query
+                $clients = $this->getClientsForDate($requestedDate);
+                
+                return response()->json([
+                    'status' => true,
+                    'data' => [
+                        'clients' => $clients,
+                        'date' => $requestedDate->toDateString(),
+                        'day_name' => $requestedDate->format('l')
+                    ]
+                ], 200);
+            }
+
+        } catch (\Exception $e) {
+            \Log::error('Get clients to pickup failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get clients',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    private function getTodaysUnpickedClients()
+    {
+        $today = Carbon::now();
+        $todayName = strtolower($today->format('l'));
+        
+        // Get clients whose pickup day is today and service has started
+        $clients = Client::with(['user', 'route'])
+            ->whereNotNull('pickUpDay')
+            ->whereNotNull('serviceStartDate')
+            ->whereRaw('LOWER(pickUpDay) = ?', [$todayName])
+            ->whereDate('serviceStartDate', '<=', $today)
+            ->get();
+
+        // Filter out clients who are already picked this week
+        $weekStart = $today->copy()->startOfWeek();
+        $weekEnd = $today->copy()->endOfWeek();
+        
+        $pickedClientIds = Pickup::where('pickup_status', 'picked')
+            ->whereBetween('pickup_date', [$weekStart, $weekEnd])
+            ->pluck('client_id')
+            ->toArray();
+
+        $unpickedClients = $clients->filter(function($client) use ($pickedClientIds) {
+            return !in_array($client->user_id, $pickedClientIds);
+        })->values();
+
+        return $unpickedClients;
+    }
+
+    private function getWeekUnpickedClients()
+    {
+        $today = Carbon::now();
+        $weekStart = $today->copy()->startOfWeek();
+        $weekEnd = $today->copy()->endOfWeek();
+        
+        // Get all clients who should be picked this week
+        $weekClients = collect();
+        $currentDate = $weekStart->copy();
+        
+        while ($currentDate->lte($weekEnd)) {
+            $dayName = strtolower($currentDate->format('l'));
+            
+            $dayClients = Client::with(['user', 'route'])
+                ->whereNotNull('pickUpDay')
+                ->whereNotNull('serviceStartDate')
+                ->whereRaw('LOWER(pickUpDay) = ?', [$dayName])
+                ->whereDate('serviceStartDate', '<=', $currentDate)
+                ->get();
+                
+            $weekClients = $weekClients->merge($dayClients);
+            $currentDate->addDay();
+        }
+        
+        // Remove duplicates (same client might appear multiple times)
+        $weekClients = $weekClients->unique('id');
+        
+        // Filter out clients who are already picked this week
+        $pickedClientIds = Pickup::where('pickup_status', 'picked')
+            ->whereBetween('pickup_date', [$weekStart, $weekEnd])
+            ->pluck('client_id')
+            ->toArray();
+
+        $unpickedClients = $weekClients->filter(function($client) use ($pickedClientIds) {
+            return !in_array($client->user_id, $pickedClientIds);
+        })->values();
+
+        return $unpickedClients;
+    }
+
+    private function getClientsForDate(Carbon $date)
+    {
+        $dayName = strtolower($date->format('l'));
+        
+        // Get clients whose pickup day matches the requested date
+        $clients = Client::with(['user', 'route'])
+            ->whereNotNull('pickUpDay')
+            ->whereNotNull('serviceStartDate')
+            ->whereRaw('LOWER(pickUpDay) = ?', [$dayName])
+            ->whereDate('serviceStartDate', '<=', $date)
+            ->get();
+
+        return $clients;
+    }
+
+    public function getClientPickups(Request $request, $clientId)
+    {
+        \Log::info('=== GET CLIENT PICKUPS START ===');
+        \Log::info('Client ID:', ['client_id' => $clientId]);
+        
+        $validator = Validator::make($request->all(), [
+            'date' => 'nullable|date',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
+            'status' => 'nullable|in:picked,unpicked,skipped'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+
+        try {
+            // Verify client exists
+            $client = \App\Models\User::where('id', $clientId)
+                ->where('role', 'client')
+                ->first();
+
+            if (!$client) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Client not found',
+                    'message' => 'Client not found'
+                ], 404);
+            }
+
+            \Log::info('Client found:', ['name' => $client->name, 'email' => $client->email]);
+
+            // Build query
+            $query = Pickup::with(['route', 'driver'])
+                ->where('client_id', $clientId);
+
+            // Apply filters
+            if ($request->date) {
+                $query->where('pickup_date', $request->date);
+            }
+
+            if ($request->start_date && $request->end_date) {
+                $query->whereBetween('pickup_date', [$request->start_date, $request->end_date]);
+            }
+
+            if ($request->status) {
+                $query->where('pickup_status', $request->status);
+            }
+
+            $pickups = $query->orderBy('pickup_date', 'desc')->get();
+
+            \Log::info('Client pickups found:', ['count' => $pickups->count()]);
+
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'client' => [
+                        'id' => $client->id,
+                        'name' => $client->name,
+                        'email' => $client->email
+                    ],
+                    'pickups' => $pickups,
+                    'filters' => [
+                        'date' => $request->date,
+                        'start_date' => $request->start_date,
+                        'end_date' => $request->end_date,
+                        'status' => $request->status
+                    ]
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Get client pickups failed:', [
+                'client_id' => $clientId,
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get client pickups',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function activateRoute(Request $request)
+    {
+        \Log::info('=== DRIVER ROUTE ACTIVATION START ===');
+        \Log::info('Request data:', $request->all());
+        \Log::info('Driver ID:', ['driver_id' => $request->user()->id]);
+
+        $validator = Validator::make($request->all(), [
+            'route_id' => 'required|exists:routes,id'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid route ID'
+            ], 401);
+        }
+
+        try {
+            $driverId = $request->user()->id;
+            $routeId = $request->route_id;
+
+            // Check if already active on this route
+            $existingActivation = \App\Models\DriverRoute::where('driver_id', $driverId)
+                ->where('route_id', $routeId)
+                ->where('is_active', true)
+                ->first();
+
+            if ($existingActivation) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Already active',
+                    'message' => 'Driver is already active on this route'
+                ], 400);
+            }
+
+            // Deactivate driver from all other routes first (one route per driver)
+            $deactivatedRoutes = \App\Models\DriverRoute::where('driver_id', $driverId)
+                ->where('is_active', true)
+                ->get();
+
+            foreach ($deactivatedRoutes as $activeRoute) {
+                $activeRoute->update([
+                    'is_active' => false,
+                    'deactivated_at' => now()
+                ]);
+                \Log::info('Deactivated driver from previous route:', [
+                    'driver_id' => $driverId,
+                    'previous_route_id' => $activeRoute->route_id
+                ]);
+            }
+
+            // Activate driver on new route
+            $activation = \App\Models\DriverRoute::create([
+                'driver_id' => $driverId,
+                'route_id' => $routeId,
+                'is_active' => true,
+                'activated_at' => now()
+            ]);
+
+            \Log::info('Driver activated on route:', [
+                'driver_id' => $driverId,
+                'route_id' => $routeId,
+                'activation_id' => $activation->id,
+                'deactivated_previous_routes' => $deactivatedRoutes->count()
+            ]);
+
+            $message = $deactivatedRoutes->count() > 0 
+                ? 'Successfully switched to new route (deactivated from ' . $deactivatedRoutes->count() . ' previous route(s))'
+                : 'Successfully activated on route';
+
+            return response()->json([
+                'status' => true,
+                'message' => $message,
+                'data' => [
+                    'activation' => $activation->load('route'),
+                    'deactivated_routes' => $deactivatedRoutes->count()
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Route activation failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Activation failed',
+                'message' => 'Failed to activate on route: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function deactivateRoute(Request $request)
+    {
+        \Log::info('=== DRIVER ROUTE DEACTIVATION START ===');
+        
+        $validator = Validator::make($request->all(), [
+            'route_id' => 'required|exists:routes,id'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid route ID'
+            ], 401);
+        }
+
+        try {
+            $driverId = $request->user()->id;
+            $routeId = $request->route_id;
+
+            $activation = \App\Models\DriverRoute::where('driver_id', $driverId)
+                ->where('route_id', $routeId)
+                ->where('is_active', true)
+                ->first();
+
+            if (!$activation) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Not active',
+                    'message' => 'Driver is not active on this route'
+                ], 400);
+            }
+
+            $activation->update([
+                'is_active' => false,
+                'deactivated_at' => now()
+            ]);
+
+            \Log::info('Driver deactivated from route:', [
+                'driver_id' => $driverId,
+                'route_id' => $routeId
+            ]);
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Successfully deactivated from route'
+            ], 200);
+
+        } catch (\Exception $e) {
+            \Log::error('Route deactivation failed:', [
+                'error' => $e->getMessage()
+            ]);
+
+            return response()->json([
+                'status' => false,
+                'error' => 'Deactivation failed',
+                'message' => 'Failed to deactivate from route'
+            ], 500);
+        }
+    }
+
+    public function getActiveRoutes(Request $request)
+    {
+        try {
+            $driverId = $request->user()->id;
+
+            $activeRoutes = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driverId)
+                ->where('is_active', true)
+                ->get();
+
+            return response()->json([
+                'status' => true,
+                'data' => ['active_routes' => $activeRoutes]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get active routes',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+}
