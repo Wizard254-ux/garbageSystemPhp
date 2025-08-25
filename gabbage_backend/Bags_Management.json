@@ -1,0 +1,294 @@
+{
+	"info": {
+		"name": "Bags API Collection",
+		"description": "Collection for testing Bag management endpoints",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://127.0.0.1:8000/api"
+		},
+		{
+			"key": "auth_token",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Login",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "login"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Bags",
+			"item": [
+				{
+					"name": "Get All Bags",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Bag",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"number_of_bags\": 5,\n  \"description\": \"Organic waste bags for collection\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Bag by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags/1",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "1"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Bag",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"number_of_bags\": 8,\n  \"description\": \"Updated description for waste bags\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/1",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "1"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Bag",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags/1",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "1"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Bag Issues",
+			"item": [
+				{
+					"name": "Get Bag Issues List",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/organization/bags/issues/list",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "issues", "list"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Request OTP (Organization)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bag_id\": 1,\n  \"driver_id\": 2\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/issue/request",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "issue", "request"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Verify OTP (Organization)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bag_id\": 1,\n  \"otp\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/organization/bags/issue/verify",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "bags", "issue", "verify"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Request OTP (Driver)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bag_id\": 1\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/bags/issue/request",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags", "issue", "request"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Verify OTP (Driver)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{auth_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"bag_id\": 1,\n  \"otp\": \"123456\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/bags/issue/verify",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "bags", "issue", "verify"]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}
