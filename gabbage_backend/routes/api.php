@@ -110,11 +110,10 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     
     // Bags management
     Route::prefix('bags')->group(function () {
-        Route::get('/', [BagController::class, 'index']);
-        Route::post('/', [BagController::class, 'store']);
-        Route::get('/{id}', [BagController::class, 'show']);
-        Route::put('/{id}', [BagController::class, 'update']);
-        Route::delete('/{id}', [BagController::class, 'destroy']);
+        Route::get('/', [BagController::class, 'getOrganizationBags']);
+        Route::post('/add', [BagController::class, 'addBags']);
+        Route::post('/remove', [BagController::class, 'removeBags']);
+        Route::post('/allocate', [BagController::class, 'allocateToDriver']);
         
         // Bag issuing with OTP
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
@@ -132,6 +131,8 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
 // Driver routes (for bag issuing and pickups)
 Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
     Route::prefix('bags')->group(function () {
+        Route::get('/', [BagController::class, 'getDriverBags']);
+        Route::post('/return', [BagController::class, 'returnBags']);
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
         Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
     });
@@ -154,12 +155,25 @@ Route::post('/mpesa/callback', [PaymentController::class, 'mpesaCallback']);
 
 // Admin routes
 Route::prefix('admin')->middleware(['auth:sanctum', 'admin.only'])->group(function () {
+    // Dashboard
+    Route::get('/dashboard/stats', [AuthController::class, 'getAdminDashboardStats']);
+    
+    // Organizations management
     Route::prefix('organizations')->group(function () {
+        Route::get('/', [AuthController::class, 'listOrganizations']);
         Route::post('/send-credentials', [AuthController::class, 'sendCredentials']);
+        Route::post('/deactivate', [AuthController::class, 'deactivateOrganization']);
         Route::get('/{id}', [AuthController::class, 'getOrganization']);
     });
+    
+    // Admins management
     Route::prefix('admins')->group(function () {
         Route::get('/list', [AuthController::class, 'listAdmins']);
         Route::post('/create', [AuthController::class, 'createAdminByAdmin']);
     });
+    
+    // Activity logs
+    Route::get('/activity-logs', [AuthController::class, 'getActivityLogs']);
+    
+
 });

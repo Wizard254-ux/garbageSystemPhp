@@ -180,6 +180,10 @@ class AuthController extends Controller
                 $user->name
             ));
             
+            // Mark as sent
+            $user->isSent = true;
+            $user->save();
+            
             return response()->json([
                 'status'=>true,
                 'message'=>'Organization Created Successfully. Credentials sent to email.',
@@ -220,6 +224,10 @@ class AuthController extends Controller
                 $newPassword,
                 $user->name
             ));
+            
+            // Mark as sent
+            $user->isSent = true;
+            $user->save();
             
             return response()->json([
                 'status'=>true,
@@ -648,7 +656,23 @@ class AuthController extends Controller
             ], 404);
         }
 
+        // Check if driver has allocated bags
+        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        if ($allocation && $allocation->available_bags > 0) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Cannot delete driver',
+                'message' => 'Driver has pending allocated bags. Please clear all bags before deletion.',
+                'data' => ['pending_bags' => $allocation->available_bags]
+            ], 400);
+        }
+
         $driver->delete();
+        
+        // Clean up allocation record if exists
+        if ($allocation) {
+            $allocation->delete();
+        }
 
         return response()->json([
             'status' => true,
@@ -753,6 +777,166 @@ class AuthController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Document deleted successfully'
+        ], 200);
+    }
+
+    // Admin Dashboard Methods
+    public function getAdminDashboardStats(Request $request)
+    {
+        $totalOrganizations = User::where('role', 'organization')->count();
+        $activeOrganizations = User::where('role', 'organization')->where('isActive', true)->count();
+        $totalDrivers = User::where('role', 'driver')->count();
+        $totalClients = User::where('role', 'client')->count();
+        $totalAdmins = User::where('role', 'admin')->count();
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'totalOrganizations' => $totalOrganizations,
+                'activeOrganizations' => $activeOrganizations,
+                'totalDrivers' => $totalDrivers,
+                'totalClients' => $totalClients,
+                'totalAdmins' => $totalAdmins
+            ]
+        ], 200);
+    }
+
+    public function listOrganizations(Request $request)
+    {
+        $page = $request->page ?? 1;
+        $limit = $request->limit ?? 10;
+        $search = $request->search ?? '';
+        $sortBy = $request->sortBy ?? 'created_at';
+        $sortOrder = $request->sortOrder ?? 'desc';
+        
+        $query = User::where('role', 'organization');
+        
+        if($search) {
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                  ->orWhere('email', 'like', "%{$search}%");
+            });
+        }
+        
+        $total = $query->count();
+        $organizations = $query->orderBy($sortBy, $sortOrder)
+                              ->skip(($page - 1) * $limit)
+                              ->take($limit)
+                              ->select('id', 'name', 'email', 'phone', 'adress', 'isActive', 'isSent', 'created_at', 'updated_at')
+                              ->get();
+        
+        // Transform data to match frontend expectations
+        $organizations = $organizations->map(function($org) {
+            return [
+                'id' => $org->id,
+                'name' => $org->name,
+                'email' => $org->email,
+                'phone' => $org->phone,
+                'adress' => $org->adress,
+                'isActive' => (bool)$org->isActive,
+                'isSent' => (bool)$org->isSent,
+                'createdAt' => $org->created_at->toISOString(),
+                'updatedAt' => $org->updated_at->toISOString()
+            ];
+        });
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'organizations' => $organizations,
+                'total' => $total,
+                'page' => $page,
+                'limit' => $limit
+            ]
+        ], 200);
+    }
+
+    public function getActivityLogs(Request $request)
+    {
+        $page = $request->page ?? 1;
+        $limit = $request->limit ?? 20;
+        $action = $request->action;
+        $userId = $request->user_id;
+        
+        $query = \App\Models\ActivityLog::with('user:id,name,email,role');
+        
+        if($action) {
+            $query->where('action', $action);
+        }
+        
+        if($userId) {
+            $query->where('user_id', $userId);
+        }
+        
+        $total = $query->count();
+        $logs = $query->orderBy('created_at', 'desc')
+                      ->skip(($page - 1) * $limit)
+                      ->take($limit)
+                      ->get();
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'logs' => $logs,
+                'total' => $total,
+                'page' => $page,
+                'limit' => $limit
+            ]
+        ], 200);
+    }
+
+    public function getSystemStats(Request $request)
+    {
+        $totalBags = \App\Models\Bag::sum('total_bags');
+        $allocatedBags = \App\Models\Bag::sum('allocated_bags');
+        $availableBags = \App\Models\Bag::sum('available_bags');
+        $totalBagIssues = \App\Models\BagIssue::where('is_verified', true)->count();
+        $totalRoutes = \App\Models\Route::count();
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'totalBags' => $totalBags,
+                'allocatedBags' => $allocatedBags,
+                'availableBags' => $availableBags,
+                'totalBagIssues' => $totalBagIssues,
+                'totalRoutes' => $totalRoutes
+            ]
+        ], 200);
+    }
+
+    public function deactivateOrganization(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'organizationId' => 'required|exists:users,id'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'Validation Error',
+                'errors' => $validator->errors()
+            ], 401);
+        }
+
+        $user = User::find($request->organizationId);
+        
+        if ($user->role !== 'organization') {
+            return response()->json([
+                'status' => false,
+                'message' => 'User is not an organization'
+            ], 400);
+        }
+        
+        $user->isActive = !$user->isActive;
+        $user->save();
+        
+        $action = $user->isActive ? 'activated' : 'deactivated';
+        
+        return response()->json([
+            'status' => true,
+            'message' => "Organization {$action} successfully",
+            'data' => ['organization' => $user]
         ], 200);
     }
 }
