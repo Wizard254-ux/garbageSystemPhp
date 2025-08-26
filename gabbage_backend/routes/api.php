@@ -15,62 +15,68 @@ use App\Http\Controllers\BagTransferController;
 
 // Protected file access
 Route::get('/storage/documents/{filename}', function (Request $request, $filename) {
-    $user = $request->user();
-    $fileUrl = url('/api/storage/documents/' . $filename);
+    // Check for token in query parameter or Authorization header
+    $token = $request->query('token') ?? $request->bearerToken();
     
-    // For admin users, allow access to all files
-    if ($user->role === 'admin') {
-        // Admin can access any file
-    } else {
-        // Check if user owns this file (check both URL formats and object format)
-        $oldUrl = url('/storage/documents/' . $filename);
-        $userDocuments = $user->documents ?? [];
-        $hasAccess = false;
+    if (!$token) {
+        return response()->json(['status' => false, 'error' => 'Unauthorized', 'message' => 'Access token is required'], 401);
+    }
+    
+    // Authenticate user with token
+    $user = \Laravel\Sanctum\PersonalAccessToken::findToken($token)?->tokenable;
+    
+    if (!$user) {
+        return response()->json(['status' => false, 'error' => 'Unauthorized', 'message' => 'Invalid token'], 401);
+    }
+    
+    $fileUrl = url('/api/storage/documents/' . $filename);
+    $oldUrl = url('/storage/documents/' . $filename);
+    $userDocuments = $user->documents ?? [];
+    
+    // Check if user owns this file directly
+    $hasAccess = in_array($fileUrl, $userDocuments) || in_array($oldUrl, $userDocuments);
+    
+    // If organization, also check if any of their drivers/clients own this file
+    if (!$hasAccess && $user->role === 'organization') {
+        // Check drivers
+        $organizationUsers = \App\Models\User::where('organization_id', $user->id)
+            ->where('role', 'driver')
+            ->get();
         
-        foreach ($userDocuments as $doc) {
-            if (is_string($doc) && ($doc === $fileUrl || $doc === $oldUrl)) {
-                $hasAccess = true;
-                break;
-            } elseif (is_array($doc) && isset($doc['url']) && $doc['url'] === $fileUrl) {
+        foreach ($organizationUsers as $orgUser) {
+            $orgUserDocuments = $orgUser->documents ?? [];
+            if (in_array($fileUrl, $orgUserDocuments) || in_array($oldUrl, $orgUserDocuments)) {
                 $hasAccess = true;
                 break;
             }
         }
         
+        // Check clients (they have different relationship structure)
         if (!$hasAccess) {
-            abort(403, 'Unauthorized access to file');
+            $clients = \App\Models\Client::where('organization_id', $user->id)->with('user')->get();
+            
+            foreach ($clients as $client) {
+                if ($client->user) {
+                    $clientUserDocuments = $client->user->documents ?? [];
+                    if (in_array($fileUrl, $clientUserDocuments) || in_array($oldUrl, $clientUserDocuments)) {
+                        $hasAccess = true;
+                        break;
+                    }
+                }
+            }
         }
+    }
+    
+    if (!$hasAccess) {
+        abort(403, 'Unauthorized access to file');
     }
     
     $path = storage_path('app/public/documents/' . $filename);
     if (!file_exists($path)) {
         abort(404);
     }
-    
-    $mimeType = mime_content_type($path);
-    return response()->file($path, [
-        'Content-Type' => $mimeType,
-        'Content-Disposition' => 'attachment; filename="' . $filename . '"'
-    ]);
-})->middleware('auth:sanctum');
-
-// Document upload route
-Route::post('/upload-documents', function (Request $request) {
-    $uploadedFiles = [];
-    
-    if ($request->hasFile('documents')) {
-        foreach ($request->file('documents') as $file) {
-            $filename = time() . '_' . $file->getClientOriginalName();
-            $file->storeAs('public/documents', $filename);
-            $uploadedFiles[] = url('/api/storage/documents/' . $filename);
-        }
-    }
-    
-    return response()->json([
-        'status' => true,
-        'data' => ['uploaded_documents' => $uploadedFiles]
-    ]);
-})->middleware('auth:sanctum');
+    return response()->file($path);
+});
 
 // Auth routes
 Route::prefix('auth')->group(function () {
@@ -87,15 +93,16 @@ Route::prefix('auth')->group(function () {
     
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
+        Route::post('/refresh-token', [AuthController::class, 'refreshToken']);
         Route::post('/create-organization', [AuthController::class, 'createOrganization'])->middleware(['admin.only', 'file.uploads']);
         Route::post('/organization/manage', [AuthController::class, 'manageOrganization'])->middleware('admin.only');
     });
 });
 
 // Organization routes (for logged-in organizations)
-Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])->group(function () {
+Route::prefix('organization')->middleware(['auth:sanctum'])->group(function () {
     // Dashboard
-    Route::get('/dashboard/stats', [AuthController::class, 'getOrganizationStats']);
+    Route::get('/dashboard/counts', [AuthController::class, 'getDashboardCounts']);
     
     // Drivers management
     Route::prefix('drivers')->group(function () {
@@ -106,16 +113,19 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::post('/{id}/update', [AuthController::class, 'updateDriver'])->middleware('file.uploads');
         Route::delete('/{id}', [AuthController::class, 'deleteDriver']);
         Route::post('/{id}/send-credentials', [AuthController::class, 'sendDriverCredentials']);
+        Route::post('/{id}/toggle-status', [AuthController::class, 'toggleDriverStatus']);
         Route::delete('/{id}/documents', [AuthController::class, 'deleteDriverDocument']);
     });
     
     // Clients management
     Route::prefix('clients')->group(function () {
         Route::get('/', [ClientController::class, 'index']);
+        Route::get('/search', [ClientController::class, 'search']);
         Route::post('/', [ClientController::class, 'store'])->middleware('file.uploads');
         Route::get('/{id}', [ClientController::class, 'show']);
         Route::put('/{id}', [ClientController::class, 'update'])->middleware('file.uploads');
         Route::post('/{id}', [ClientController::class, 'update'])->middleware('file.uploads'); // For method spoofing
+        Route::post('/{id}/toggle-status', [ClientController::class, 'toggleStatus']);
         Route::delete('/{id}', [ClientController::class, 'destroy']);
         Route::delete('/{id}/documents', [ClientController::class, 'deleteDocument']);
         Route::get('/{id}/payments', [PaymentController::class, 'getClientPayments']);
@@ -125,10 +135,10 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     });
     
     // Routes management
-    Route::prefix('routes')->group(function () {
-        Route::get('/', [RouteController::class, 'index']);
+    Route::prefix('routes')->middleware('organization.only')->group(function () {
+        Route::get('/', [RouteController::class, 'index'])->withoutMiddleware('organization.only');
         Route::post('/', [RouteController::class, 'store']);
-        Route::get('/{id}', [RouteController::class, 'show']);
+        Route::get('/{id}', [RouteController::class, 'show'])->withoutMiddleware('organization.only');
         Route::put('/{id}', [RouteController::class, 'update']);
         Route::delete('/{id}', [RouteController::class, 'destroy']);
     });
@@ -144,6 +154,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     Route::prefix('invoices')->group(function () {
         Route::get('/', [InvoiceController::class, 'index']);
         Route::post('/', [InvoiceController::class, 'store']);
+        Route::get('/aging-summary', [InvoiceController::class, 'getAgingSummary']);
         Route::get('/{id}', [InvoiceController::class, 'show']);
         Route::post('/resend', [InvoiceController::class, 'resendInvoices']);
     });
@@ -165,6 +176,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     // Pickups management
     Route::prefix('pickups')->group(function () {
         Route::get('/', [\App\Http\Controllers\PickupController::class, 'getPickups']);
+        Route::post('/', [\App\Http\Controllers\PickupController::class, 'createPickup']);
         Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getClientsToPickup']);
     });
 });
@@ -202,6 +214,12 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
         Route::post('/deactivate', [\App\Http\Controllers\PickupController::class, 'deactivateRoute']);
         Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);
     });
+    
+    // Dashboard endpoints
+    Route::get('/stats', [\App\Http\Controllers\Auth\AuthController::class, 'getOrganizationDashboardStats']);
+    Route::get('/recent-activity', [\App\Http\Controllers\Auth\AuthController::class, 'getRecentActivity']);
+    Route::get('/pickups/today-summary', [\App\Http\Controllers\PickupController::class, 'getTodayPickupsSummary']);
+    Route::get('/financial-summary', [\App\Http\Controllers\PaymentController::class, 'getFinancialSummary']);
 });
 
 // M-Pesa Callback (no auth required)

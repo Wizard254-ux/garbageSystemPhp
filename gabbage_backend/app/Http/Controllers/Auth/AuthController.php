@@ -28,6 +28,16 @@ class AuthController extends Controller
             if(Auth::attempt($credentials)){
                 $user=Auth::user();
                 
+                // Check if user is active (for organization and driver roles)
+                if(($user->role === 'organization' || $user->role === 'driver') && !$user->isActive) {
+                    Auth::logout();
+                    return response()->json([
+                        'status'=>false,
+                        'error'=>'Account deactivated',
+                        'message'=>'Your account has been deactivated. Please contact support.'
+                    ],401);
+                }
+                
                 // Create token with proper expiration
                 if($request->remember) {
                     $token = $user->createToken('authToken', ['*'], now()->addDays(30));
@@ -73,6 +83,29 @@ class AuthController extends Controller
             'message'=>'Logout Successfully',
             'data'=>null
         ],200);
+    }
+
+    public function refreshToken(Request $request)
+    {
+        $user = $request->user();
+        
+        // Delete current token
+        $request->user()->currentAccessToken()->delete();
+        
+        // Create new token
+        $token = $user->createToken('authToken');
+        $token->accessToken->expires_at = now()->addHours(2);
+        $token->accessToken->save();
+        
+        return response()->json([
+            'status' => true,
+            'message' => 'Token refreshed successfully',
+            'data' => [
+                'access_token' => $token->plainTextToken,
+                'token_type' => 'Bearer',
+                'user' => $user
+            ]
+        ], 200);
     }
 
     public function Register(Request $request)
@@ -423,36 +456,109 @@ class AuthController extends Controller
     }
 
     // Organization-specific methods
-    public function getOrganizationStats(Request $request)
+    public function getDashboardCounts(Request $request)
     {
         $organizationId = $request->user()->id;
         
-        $totalDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->count();
-        $totalClients = User::where('role', 'client')->where('organization_id', $organizationId)->count();
-        $activeDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->where('isActive', true)->count();
-        $activeClients = User::where('role', 'client')->where('organization_id', $organizationId)->where('isActive', true)->count();
+        // Get driver counts from users table
+        $driverCounts = \DB::select("
+            SELECT 
+                COUNT(CASE WHEN role = 'driver' THEN 1 END) as totalDrivers,
+                COUNT(CASE WHEN role = 'driver' AND isActive = 1 THEN 1 END) as activeDrivers
+            FROM users 
+            WHERE organization_id = ? AND role = 'driver'
+        ", [$organizationId]);
+
+        // Get client counts from clients table (joined with users for isActive status)
+        $clientCounts = \DB::select("
+            SELECT 
+                COUNT(c.id) as totalClients,
+                COUNT(CASE WHEN u.isActive = 1 OR u.isActive IS NULL THEN 1 END) as activeClients
+            FROM clients c
+            LEFT JOIN users u ON c.user_id = u.id
+            WHERE c.organization_id = ?
+        ", [$organizationId]);
+
+        // Get routes count
+        $totalRoutes = \App\Models\Route::where('organization_id', $organizationId)->count();
+        
+        $driverResult = $driverCounts[0] ?? (object)['totalDrivers' => 0, 'activeDrivers' => 0];
+        $clientResult = $clientCounts[0] ?? (object)['totalClients' => 0, 'activeClients' => 0];
         
         return response()->json([
-            'status'=>true,
-            'data'=>[
-                'totalDrivers'=>$totalDrivers,
-                'totalClients'=>$totalClients,
-                'totalRoutes'=>0,
-                'activeDrivers'=>$activeDrivers,
-                'activeClients'=>$activeClients
+            'status' => true,
+            'data' => [
+                'totalDrivers' => (int)$driverResult->totalDrivers,
+                'totalClients' => (int)$clientResult->totalClients,
+                'totalRoutes' => $totalRoutes,
+                'activeDrivers' => (int)$driverResult->activeDrivers,
+                'activeClients' => (int)$clientResult->activeClients
             ]
-        ],200);
+        ], 200);
     }
 
     public function listOrganizationDrivers(Request $request)
     {
         $organizationId = $request->user()->id;
-        $drivers = User::where('role', 'driver')->where('organization_id', $organizationId)->get();
+        $page = $request->get('page', 1);
+        $limit = $request->get('limit', 20);
+        $search = $request->get('search', '');
+        
+        $query = User::where('role', 'driver')->where('organization_id', $organizationId);
+        
+        // Add search functionality
+        if (!empty($search)) {
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('email', 'LIKE', '%' . $search . '%')
+                  ->orWhere('phone', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        // Get total count for pagination
+        $totalDrivers = $query->count();
+        $totalPages = ceil($totalDrivers / $limit);
+        
+        // Apply pagination
+        $drivers = $query->orderBy('created_at', 'desc')
+                        ->skip(($page - 1) * $limit)
+                        ->take($limit)
+                        ->get();
+        
+        // Add active route information and bag allocation for each driver
+        $drivers->each(function ($driver) {
+            $activeRoute = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driver->id)
+                ->where('is_active', true)
+                ->first();
+            
+            $driver->active_route = $activeRoute ? [
+                'id' => $activeRoute->route->id,
+                'name' => $activeRoute->route->name,
+                'activated_at' => $activeRoute->activated_at
+            ] : null;
+            
+            // Add bag allocation (only active status = 1)
+            $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $driver->id)
+                ->where('status', 1)
+                ->first();
+            $driver->allocated_bags = $bagAllocation ? $bagAllocation->available_bags : 0;
+        });
         
         return response()->json([
-            'status'=>true,
-            'data'=>['users'=>$drivers]
-        ],200);
+            'status' => true,
+            'data' => [
+                'users' => $drivers,
+                'pagination' => [
+                    'currentPage' => (int)$page,
+                    'totalPages' => $totalPages,
+                    'totalItems' => $totalDrivers,
+                    'itemsPerPage' => (int)$limit,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]
+        ], 200);
     }
 
     public function listOrganizationClients(Request $request)
@@ -557,9 +663,17 @@ class AuthController extends Controller
             ], 404);
         }
 
+        // Get driver bag allocation (only active status = 1)
+        $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)
+            ->where('status', 1)
+            ->first();
+        
+        $driverData = $driver->toArray();
+        $driverData['allocated_bags'] = $bagAllocation ? $bagAllocation->available_bags : 0;
+
         return response()->json([
             'status' => true,
-            'data' => ['driver' => $driver]
+            'data' => ['driver' => $driverData]
         ], 200);
     }
 
@@ -587,6 +701,7 @@ class AuthController extends Controller
             'name' => 'nullable|string|max:255',
             'email' => 'nullable|email|unique:users,email,' . $id,
             'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string|max:255',
             'isActive' => 'nullable|in:true,false,1,0',
             'uploaded_documents' => 'nullable|array'
         ]);
@@ -612,6 +727,7 @@ class AuthController extends Controller
         if ($request->has('name')) $updateData['name'] = $request->name;
         if ($request->has('email')) $updateData['email'] = $request->email;
         if ($request->has('phone')) $updateData['phone'] = $request->phone;
+        if ($request->has('address')) $updateData['address'] = $request->address;
         if ($request->has('isActive')) $updateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
         $updateData['documents'] = $allDocuments;
 
@@ -661,8 +777,10 @@ class AuthController extends Controller
             ], 404);
         }
 
-        // Check if driver has allocated bags
-        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        // Check if driver has allocated bags (only active status = 1)
+        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)
+            ->where('status', 1)
+            ->first();
         if ($allocation && $allocation->available_bags > 0) {
             return response()->json([
                 'status' => false,
@@ -672,12 +790,11 @@ class AuthController extends Controller
             ], 400);
         }
 
-        $driver->delete();
+        // Delete related records first to avoid foreign key constraints
+        \App\Models\ActivityLog::where('user_id', $id)->delete();
+        \App\Models\DriverBagsAllocation::where('driver_id', $id)->delete();
         
-        // Clean up allocation record if exists
-        if ($allocation) {
-            $allocation->delete();
-        }
+        $driver->delete();
 
         return response()->json([
             'status' => true,
@@ -722,6 +839,11 @@ class AuthController extends Controller
         try {
             Mail::to($driver->email)->send(new \App\Mail\DriverCredentials($driver->email, $newPassword, $driver->name));
             \Log::info('Email sent successfully to driver');
+            
+            // Mark as sent
+            $driver->isSent = 1;
+            $driver->save();
+            \Log::info('Driver isSent status updated to true');
         } catch (\Exception $e) {
             \Log::error('Failed to send email:', ['error' => $e->getMessage()]);
         }
@@ -730,6 +852,43 @@ class AuthController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Driver credentials sent successfully'
+        ], 200);
+    }
+
+    public function toggleDriverStatus(Request $request, $id)
+    {
+        $organizationId = $request->user()->id;
+        $driver = User::where('id', $id)
+            ->where('role', 'driver')
+            ->where('organization_id', $organizationId)
+            ->first();
+
+        if (!$driver) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Driver not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'isActive' => 'required|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data'
+            ], 401);
+        }
+
+        $driver->update(['isActive' => $request->isActive]);
+
+        return response()->json([
+            'status' => true,
+            'message' => $request->isActive ? 'Driver activated successfully' : 'Driver deactivated successfully',
+            'data' => ['driver' => $driver->fresh()]
         ], 200);
     }
 
@@ -945,7 +1104,7 @@ class AuthController extends Controller
         ], 200);
     }
 
-    // Driver-specific methods
+     // Driver-specific methods
     public function getOrganizationDrivers(Request $request)
     {
         $organizationId = $request->user()->organization_id;

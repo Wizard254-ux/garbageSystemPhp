@@ -12,7 +12,9 @@ class DriverBagsAllocation extends Model
         'driver_id',
         'allocated_bags',
         'used_bags',
-        'available_bags'
+        'available_bags',
+        'bags_from_previous',
+        'status'
     ];
 
     public function organization(): BelongsTo

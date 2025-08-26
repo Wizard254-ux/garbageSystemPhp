@@ -55,8 +55,10 @@ class BagIssueController extends Controller
             ], 404);
         }
 
-        // Check driver's bag allocation
-        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+        // Check driver's bag allocation (only active status = 1)
+        $allocation = DriverBagsAllocation::where('driver_id', $driverId)
+            ->where('status', 1)
+            ->first();
 
         if (!$allocation || $allocation->available_bags < $request->number_of_bags) {
             return response()->json([
@@ -159,8 +161,10 @@ class BagIssueController extends Controller
 
         // Process the bag issue
         DB::transaction(function () use ($bagIssue, $request) {
-            // Update driver allocation
-            $allocation = DriverBagsAllocation::where('driver_id', $request->user()->id)->first();
+            // Update driver allocation (only active status = 1)
+            $allocation = DriverBagsAllocation::where('driver_id', $request->user()->id)
+                ->where('status', 1)
+                ->first();
             $allocation->decrement('available_bags', $bagIssue->number_of_bags_issued);
             $allocation->increment('used_bags', $bagIssue->number_of_bags_issued);
 
@@ -198,14 +202,47 @@ class BagIssueController extends Controller
 
     public function index(Request $request)
     {
-        $organizationId = $request->user()->id;
+        \Log::info('=== BAG ISSUES SEARCH START ===');
+        \Log::info('Request params:', $request->all());
         
-        $bagIssues = BagIssue::whereHas('driver', function($query) use ($organizationId) {
-                $query->where('organization_id', $organizationId);
+        $organizationId = $request->user()->id;
+        \Log::info('Organization ID:', ['org_id' => $organizationId]);
+        
+        $query = BagIssue::whereHas('driver', function($driverQuery) use ($organizationId) {
+                $driverQuery->where('organization_id', $organizationId);
             })
-            ->with(['driver:id,name', 'client:id,name'])
-            ->orderBy('created_at', 'desc')
-            ->get();
+            ->with(['driver:id,name', 'client:id,name']);
+        
+        // Add search functionality
+        if ($request->has('search') && !empty(trim($request->search))) {
+            $searchTerm = trim($request->search);
+            \Log::info('APPLYING SEARCH FILTER with term:', ['search' => $searchTerm]);
+            
+            $query->where(function($q) use ($searchTerm) {
+                $q->whereHas('driver', function($driverQuery) use ($searchTerm) {
+                      $driverQuery->where('name', 'like', '%' . $searchTerm . '%');
+                  })
+                  ->orWhereHas('client', function($clientQuery) use ($searchTerm) {
+                      $clientQuery->where('name', 'like', '%' . $searchTerm . '%');
+                  });
+            });
+        }
+        
+        // Add status filter
+        if ($request->has('status') && !empty(trim($request->status))) {
+            $statusFilter = trim($request->status);
+            \Log::info('APPLYING STATUS FILTER:', ['status' => $statusFilter]);
+            
+            if ($statusFilter === 'verified') {
+                $query->where('is_verified', true);
+            } elseif ($statusFilter === 'pending') {
+                $query->where('is_verified', false);
+            }
+        }
+        
+        $bagIssues = $query->orderBy('created_at', 'desc')->get();
+        \Log::info('Bag issues found:', ['count' => $bagIssues->count()]);
+        \Log::info('=== BAG ISSUES SEARCH END ===');
 
         return response()->json([
             'status' => true,

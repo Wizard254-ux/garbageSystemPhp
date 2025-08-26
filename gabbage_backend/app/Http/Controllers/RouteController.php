@@ -10,12 +10,77 @@ class RouteController extends Controller
 {
     public function index(Request $request)
     {
-        $organizationId = $request->user()->id;
-        $routes = Route::where('organization_id', $organizationId)->with('activeDriver')->get();
+        $user = $request->user();
+        
+        if ($user->role === 'organization') {
+            $organizationId = $user->id;
+        } elseif ($user->role === 'driver') {
+            $organizationId = $user->organization_id;
+        } else {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'Access denied'
+            ], 403);
+        }
+        $page = $request->get('page', 1);
+        $limit = $request->get('limit', 20);
+        $search = $request->get('search', '');
+        
+        $query = Route::where('organization_id', $organizationId);
+        
+        // Add search functionality
+        if (!empty($search)) {
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('path', 'LIKE', '%' . $search . '%')
+                  ->orWhere('description', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        // Get total count for pagination
+        $totalRoutes = $query->count();
+        $totalPages = ceil($totalRoutes / $limit);
+        
+        // Apply pagination and ordering, include isActive field
+        $routes = $query->select('*')
+                       ->orderBy('created_at', 'desc')
+                       ->skip(($page - 1) * $limit)
+                       ->take($limit)
+                       ->get();
+        
+        // Add active drivers and client count information for each route
+        $routes->each(function ($route) {
+            $activeDrivers = \App\Models\DriverRoute::with('driver')
+                ->where('route_id', $route->id)
+                ->where('is_active', true)
+                ->get();
+            
+            $route->active_drivers = $activeDrivers->map(function ($driverRoute) {
+                return [
+                    'id' => $driverRoute->driver->id,
+                    'name' => $driverRoute->driver->name,
+                    'activated_at' => $driverRoute->activated_at
+                ];
+            });
+            
+            // Add client count for this route
+            $route->clients_count = \App\Models\Client::where('route_id', $route->id)->count();
+        });
         
         return response()->json([
             'status' => true,
-            'data' => ['data' => $routes]
+            'data' => [
+                'data' => $routes,
+                'pagination' => [
+                    'currentPage' => (int)$page,
+                    'totalPages' => $totalPages,
+                    'totalItems' => $totalRoutes,
+                    'itemsPerPage' => (int)$limit,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]
         ], 200);
     }
 
@@ -56,8 +121,23 @@ class RouteController extends Controller
 
     public function show(Request $request, $id)
     {
-        $organizationId = $request->user()->id;
-        $route = Route::where('organization_id', $organizationId)->with('activeDriver')->find($id);
+        $user = $request->user();
+        
+        // Allow both organization and driver access
+        if ($user->role === 'organization') {
+            $route = Route::where('organization_id', $user->id)->find($id);
+        } elseif ($user->role === 'driver') {
+            // Driver can access routes they are assigned to
+            $route = Route::whereHas('driverRoutes', function($q) use ($user) {
+                $q->where('driver_id', $user->id)->where('is_active', true);
+            })->find($id);
+        } else {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'Access denied'
+            ], 403);
+        }
 
         if (!$route) {
             return response()->json([
@@ -66,6 +146,42 @@ class RouteController extends Controller
                 'message' => 'Route not found'
             ], 404);
         }
+        
+        // Add active drivers information
+        $activeDrivers = \App\Models\DriverRoute::with('driver')
+            ->where('route_id', $route->id)
+            ->where('is_active', true)
+            ->get();
+        
+        $route->active_drivers = $activeDrivers->map(function ($driverRoute) {
+            return [
+                'id' => $driverRoute->driver->id,
+                'name' => $driverRoute->driver->name,
+                'email' => $driverRoute->driver->email,
+                'phone' => $driverRoute->driver->phone,
+                'activated_at' => $driverRoute->activated_at
+            ];
+        });
+        
+        // Add clients information
+        $clients = \App\Models\Client::with('user')
+            ->where('route_id', $route->id)
+            ->get();
+            
+        $route->clients = $clients->map(function ($client) {
+            return [
+                'id' => $client->id,
+                'name' => $client->user->name,
+                'email' => $client->user->email,
+                'phone' => $client->user->phone,
+                'address' => $client->user->adress,
+                'clientType' => $client->clientType,
+                'monthlyRate' => $client->monthlyRate,
+                'pickUpDay' => $client->pickUpDay
+            ];
+        });
+        
+        $route->clients_count = $clients->count();
 
         return response()->json([
             'status' => true,

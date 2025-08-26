@@ -11,12 +11,52 @@ class InvoiceController extends Controller
 {
     public function index(Request $request)
     {
+        \Log::info('=== FETCH ALL INVOICES START ===');
+        \Log::info('Request params:', $request->all());
+        
         $organizationId = $request->user()->id;
-        $invoices = Invoice::where('organization_id', $organizationId)
-            ->with('client')
-            ->orderBy('created_at', 'desc')
-            ->get();
-
+        \Log::info('Organization ID:', ['org_id' => $organizationId]);
+        
+        $query = Invoice::where('organization_id', $organizationId)->with('client');
+        
+        // Add search/filter functionality
+        if ($request->has('status') && !empty($request->status)) {
+            \Log::info('Filtering by status:', ['status' => $request->status]);
+            if (in_array($request->status, ['fully_paid', 'partially_paid', 'unpaid'])) {
+                $query->where('payment_status', $request->status);
+            } else {
+                $query->where('status', $request->status);
+            }
+        }
+        
+        if ($request->has('startDate') && !empty($request->startDate)) {
+            \Log::info('Filtering by start date:', ['start_date' => $request->startDate]);
+            $query->whereDate('created_at', '>=', $request->startDate);
+        }
+        
+        if ($request->has('endDate') && !empty($request->endDate)) {
+            \Log::info('Filtering by end date:', ['end_date' => $request->endDate]);
+            $query->whereDate('created_at', '<=', $request->endDate);
+        }
+        
+        if ($request->has('accountNumber') && !empty($request->accountNumber)) {
+            \Log::info('Filtering by account number:', ['account_number' => $request->accountNumber]);
+            $query->whereHas('client', function($clientQuery) use ($request) {
+                $clientQuery->where('id', 'like', '%' . $request->accountNumber . '%');
+            });
+        }
+        
+        if ($request->has('clientName') && !empty($request->clientName)) {
+            \Log::info('Filtering by client name:', ['client_name' => $request->clientName]);
+            $query->whereHas('client', function($clientQuery) use ($request) {
+                $clientQuery->where('name', 'like', '%' . $request->clientName . '%');
+            });
+        }
+        
+        $invoices = $query->orderBy('created_at', 'desc')->get();
+        \Log::info('Invoices fetched:', ['count' => $invoices->count()]);
+        
+        \Log::info('=== FETCH ALL INVOICES END ===');
         return response()->json([
             'status' => true,
             'data' => ['invoices' => $invoices]
@@ -105,18 +145,38 @@ class InvoiceController extends Controller
 
     public function show(Request $request, $id)
     {
+        \Log::info('=== FETCH INVOICE DETAILS START ===');
+        \Log::info('Invoice ID:', ['id' => $id]);
+        
         $organizationId = $request->user()->id;
+        \Log::info('Organization ID:', ['org_id' => $organizationId]);
+        
         $invoice = Invoice::where('organization_id', $organizationId)
             ->with('client')
             ->find($id);
 
         if (!$invoice) {
+            \Log::warning('Invoice not found:', ['id' => $id, 'org_id' => $organizationId]);
             return response()->json([
                 'status' => false,
                 'error' => 'Not found',
                 'message' => 'Invoice not found'
             ], 404);
         }
+        
+        // Get payment details if payment_ids exist
+        $payments = [];
+        if (!empty($invoice->payment_ids)) {
+            $payments = \App\Models\Payment::whereIn('id', $invoice->payment_ids)
+                ->select('id', 'trans_id', 'first_name', 'amount', 'payment_method', 'status', 'created_at')
+                ->get();
+            \Log::info('Found payments for invoice:', ['payment_count' => $payments->count()]);
+        }
+        
+        $invoice->payments = $payments;
+        
+        \Log::info('Invoice found:', ['invoice_number' => $invoice->invoice_number, 'amount' => $invoice->amount]);
+        \Log::info('=== FETCH INVOICE DETAILS END ===');
 
         return response()->json([
             'status' => true,
@@ -126,7 +186,11 @@ class InvoiceController extends Controller
 
     public function getClientInvoices(Request $request, $clientId)
     {
+        \Log::info('=== FETCH CLIENT INVOICES START ===');
+        \Log::info('Client ID:', ['client_id' => $clientId]);
+        
         $organizationId = $request->user()->id;
+        \Log::info('Organization ID:', ['org_id' => $organizationId]);
         
         // Verify client belongs to organization
         $client = User::where('id', $clientId)
@@ -134,17 +198,37 @@ class InvoiceController extends Controller
             ->first();
 
         if (!$client) {
+            \Log::warning('Client not found:', ['client_id' => $clientId]);
             return response()->json([
                 'status' => false,
                 'error' => 'Not found',
                 'message' => 'Client not found'
             ], 404);
         }
+        
+        \Log::info('Client found:', ['client_name' => $client->name, 'client_email' => $client->email]);
 
         $invoices = Invoice::where('client_id', $clientId)
             ->where('organization_id', $organizationId)
             ->orderBy('created_at', 'desc')
             ->get();
+            
+        \Log::info('Client invoices fetched:', ['count' => $invoices->count()]);
+
+        // Transform invoices to include transaction IDs instead of payment IDs
+        $invoices->transform(function ($invoice) {
+            if (!empty($invoice->payment_ids)) {
+                $transactionIds = \App\Models\Payment::whereIn('id', $invoice->payment_ids)
+                    ->pluck('trans_id')
+                    ->toArray();
+                $invoice->transaction_ids = $transactionIds;
+            } else {
+                $invoice->transaction_ids = [];
+            }
+            return $invoice;
+        });
+        
+        \Log::info('=== FETCH CLIENT INVOICES END ===');
 
         return response()->json([
             'status' => true,
@@ -307,5 +391,82 @@ class InvoiceController extends Controller
         }
 
         \Log::info('=== EXISTING PAYMENTS PROCESSING COMPLETED ===');
+    }
+
+    public function getAgingSummary(Request $request)
+    {
+        \Log::info('=== FETCH AGING SUMMARY START ===');
+        
+        $organizationId = $request->user()->id;
+        $gracePeriodDays = 5; // 7-day grace period
+        
+        // Get all unpaid/partially paid invoices that are past due date + grace period
+        $overdueInvoices = Invoice::where('organization_id', $organizationId)
+            ->whereIn('payment_status', ['unpaid', 'partially_paid'])
+            ->whereRaw('DATE_ADD(due_date, INTERVAL ? DAY) < NOW()', [$gracePeriodDays])
+            ->with('client')
+            ->get();
+        
+        \Log::info('Found overdue invoices:', ['count' => $overdueInvoices->count()]);
+        
+        // Calculate aging buckets
+        $buckets = [
+            ['range' => '1-30 days', 'min' => 1, 'max' => 30],
+            ['range' => '31-60 days', 'min' => 31, 'max' => 60],
+            ['range' => '61-90 days', 'min' => 61, 'max' => 90],
+            ['range' => '90+ days', 'min' => 91, 'max' => 999999]
+        ];
+        
+        $agingBuckets = [];
+        $totalUnpaidAmount = 0;
+        
+        foreach ($buckets as $bucket) {
+            $bucketInvoices = $overdueInvoices->filter(function ($invoice) use ($bucket, $gracePeriodDays) {
+                $dueDate = new \DateTime($invoice->due_date);
+                $graceEndDate = $dueDate->modify("+{$gracePeriodDays} days");
+                $now = new \DateTime();
+                $daysOverdue = $now->diff($graceEndDate)->days;
+                
+                return $daysOverdue >= $bucket['min'] && $daysOverdue <= $bucket['max'];
+            });
+            
+            $bucketAmount = $bucketInvoices->sum(function ($invoice) {
+                return floatval($invoice->amount) - floatval($invoice->paid_amount);
+            });
+            
+            $agingBuckets[] = [
+                'range' => $bucket['range'],
+                'count' => $bucketInvoices->count(),
+                'totalAmount' => $bucketAmount,
+                'percentage' => 0 // Will calculate after getting total
+            ];
+            
+            $totalUnpaidAmount += $bucketAmount;
+        }
+        
+        // Calculate percentages
+        foreach ($agingBuckets as &$bucket) {
+            $bucket['percentage'] = $totalUnpaidAmount > 0 ? ($bucket['totalAmount'] / $totalUnpaidAmount) * 100 : 0;
+        }
+        
+        $summary = [
+            'totalUnpaidAmount' => $totalUnpaidAmount,
+            'totalInvoices' => $overdueInvoices->count(),
+            'overdueCount' => $overdueInvoices->count(),
+            'overdueAmount' => $totalUnpaidAmount,
+            'dueCount' => 0,
+            'dueAmount' => 0,
+            'agingBuckets' => $agingBuckets,
+            'gracePeriodDays' => $gracePeriodDays,
+            'message' => "Aging calculation starts after {$gracePeriodDays}-day grace period from due date"
+        ];
+        
+        \Log::info('Aging summary calculated:', ['total_amount' => $totalUnpaidAmount, 'total_invoices' => $overdueInvoices->count()]);
+        \Log::info('=== FETCH AGING SUMMARY END ===');
+        
+        return response()->json([
+            'status' => true,
+            'data' => ['summary' => $summary]
+        ], 200);
     }
 }
