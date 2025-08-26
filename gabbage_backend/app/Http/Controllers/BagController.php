@@ -225,11 +225,13 @@ class BagController extends Controller
         ], 200);
     }
 
-    // Driver returns bags to organization
-    public function returnBags(Request $request)
+    // Organization processes bag returns from drivers
+    public function processBagReturn(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'number_of_bags' => 'required|integer|min:1'
+            'driver_id' => 'required|exists:users,id',
+            'number_of_bags' => 'required|integer|min:1',
+            'reason' => 'nullable|string|max:255'
         ]);
 
         if ($validator->fails()) {
@@ -243,20 +245,33 @@ class BagController extends Controller
             ], 401);
         }
 
-        $driverId = $request->user()->id;
-        $organizationId = $request->user()->organization_id;
+        $organizationId = $request->user()->id;
+        
+        // Check if driver belongs to organization
+        $driver = User::where('id', $request->driver_id)
+            ->where('organization_id', $organizationId)
+            ->where('role', 'driver')
+            ->first();
 
-        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+        if (!$driver) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Invalid driver',
+                'message' => 'Driver not found or does not belong to your organization'
+            ], 404);
+        }
+
+        $allocation = DriverBagsAllocation::where('driver_id', $request->driver_id)->first();
 
         if (!$allocation || $allocation->available_bags < $request->number_of_bags) {
             return response()->json([
                 'status' => false,
                 'error' => 'Insufficient bags',
-                'message' => 'Not enough bags to return'
+                'message' => 'Driver does not have enough bags to return'
             ], 400);
         }
 
-        DB::transaction(function () use ($allocation, $request, $organizationId) {
+        DB::transaction(function () use ($allocation, $request, $organizationId, $driver) {
             // Update driver allocation
             $allocation->decrement('allocated_bags', $request->number_of_bags);
             $allocation->decrement('available_bags', $request->number_of_bags);
@@ -269,11 +284,13 @@ class BagController extends Controller
             // Log the activity
             ActivityLog::create([
                 'user_id' => $request->user()->id,
-                'action' => 'bags_returned',
-                'description' => "{$request->user()->name} returned {$request->number_of_bags} bags to organization",
-                'reason' => null,
+                'action' => 'bags_return_processed',
+                'description' => "Processed return of {$request->number_of_bags} bags from driver {$driver->name}",
+                'reason' => $request->reason,
                 'data' => [
                     'bags_returned' => $request->number_of_bags,
+                    'driver_id' => $request->driver_id,
+                    'driver_name' => $driver->name,
                     'driver_remaining' => $allocation->fresh()->available_bags,
                     'organization_available' => $bag->fresh()->available_bags
                 ]
@@ -282,8 +299,30 @@ class BagController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'Bags returned successfully',
-            'data' => ['driver_allocation' => $allocation->fresh()]
+            'message' => 'Bag return processed successfully',
+            'data' => [
+                'driver_allocation' => $allocation->fresh(),
+                'organization_bags' => Bag::where('organization_id', $organizationId)->first()
+            ]
+        ], 200);
+    }
+
+    // Get driver bag statistics
+    public function getDriverBagStats(Request $request)
+    {
+        $driverId = $request->user()->id;
+        
+        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'bags' => $allocation ?? [
+                    'allocated_bags' => 0,
+                    'used_bags' => 0,
+                    'available_bags' => 0
+                ]
+            ]
         ], 200);
     }
 
@@ -338,7 +377,7 @@ class BagController extends Controller
         ], 200);
     }
 
-    // Get driver bags
+    // Get driver bags (enhanced)
     public function getDriverBags(Request $request)
     {
         $driverId = $request->user()->id;
@@ -347,7 +386,13 @@ class BagController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => ['driver_bags' => $allocation]
+            'data' => [
+                'driver_bags' => $allocation ?? [
+                    'allocated_bags' => 0,
+                    'used_bags' => 0,
+                    'available_bags' => 0
+                ]
+            ]
         ], 200);
     }
 }

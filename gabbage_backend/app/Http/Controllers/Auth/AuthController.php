@@ -27,15 +27,13 @@ class AuthController extends Controller
             $credentials=$request->only('email','password');
             if(Auth::attempt($credentials)){
                 $user=Auth::user();
-                $token = $user->createToken('authToken');
                 
-                // Set expiration based on remember me
+                // Create token with proper expiration
                 if($request->remember) {
-                    $token->accessToken->expires_at = now()->addDays(30);
+                    $token = $user->createToken('authToken', ['*'], now()->addDays(30));
                 } else {
-                    $token->accessToken->expires_at = now()->addHours(2);
+                    $token = $user->createToken('authToken', ['*'], now()->addHours(24));
                 }
-                $token->accessToken->save();
                 
                 $tokenResult = $token->plainTextToken;
                 return response()->json([
@@ -175,6 +173,8 @@ class AuthController extends Controller
 
     public function CreateOrganization(Request $request)
     {
+
+        
         $validator=Validator($request->all(),[
             'name'=>'required|string|max:255',
             'email'=>'required|email|unique:users,email',
@@ -186,6 +186,9 @@ class AuthController extends Controller
         if(!$validator->fails()){
             $randomPassword = Str::random(12);
             
+            // Get processed documents from middleware
+            $processedDocuments = $request->attributes->get('processed_documents', []);
+            
             $user=User::create([
                 'name'=>$request->name,
                 'email'=>$request->email,
@@ -193,31 +196,24 @@ class AuthController extends Controller
                 'role'=>'organization',
                 'phone'=>$request->phone,
                 'address'=>$request->address,
-                'documents'=>$request->uploaded_documents ?? []
+                'documents'=>$processedDocuments,
+                'isSent'=>false
             ]);
             
-            // Send credentials via email
-            Mail::to($user->email)->send(new OrganizationCredentials(
-                $user->email,
-                $randomPassword,
-                $user->name
-            ));
-            
-            // Mark as sent
-            $user->isSent = true;
-            $user->save();
+
             
             return response()->json([
                 'status'=>true,
-                'message'=>'Organization Created Successfully. Credentials sent to email.',
+                'message'=>'Organization Created Successfully.',
                 'data'=>['user'=>$user]
             ],200);
         }else{
+            \Log::error('CreateOrganization validation failed', $validator->errors()->toArray());
             return response()->json([
                 'status'=>false,
                 'message'=>'Validation Error',
                 'errors'=>$validator->errors()
-            ],401);
+            ],422);
         }
     }
 
@@ -270,7 +266,7 @@ class AuthController extends Controller
     {
         $validator=Validator($request->all(),[
             'action'=>'required|in:edit,delete,list',
-            'organizationId'=>'required_unless:action,list|exists:users,id',
+            'organizationId'=>'nullable|exists:users,id',
             'updateData'=>'required_if:action,edit|array',
             'page'=>'nullable|integer|min:1',
             'limit'=>'nullable|integer|min:1|max:100',
@@ -278,6 +274,15 @@ class AuthController extends Controller
             'sortBy'=>'nullable|in:name,email,created_at,updated_at',
             'sortOrder'=>'nullable|in:asc,desc',
         ]);
+
+        // Additional validation for organizationId when action is not 'list'
+        if ($request->action !== 'list' && !$request->organizationId) {
+            return response()->json([
+                'status'=>false,
+                'message'=>'Organization ID is required for this action',
+                'errors'=>['organizationId' => ['Organization ID is required']]
+            ],401);
+        }
 
         if(!$validator->fails()){
             if($request->action === 'list') {
@@ -300,7 +305,7 @@ class AuthController extends Controller
                 $organizations = $query->orderBy($sortBy, $sortOrder)
                                       ->skip(($page - 1) * $limit)
                                       ->take($limit)
-                                      ->select('id', 'name', 'email', 'phone', 'created_at', 'updated_at')
+                                      ->select('id', 'name', 'email', 'phone', 'address', 'isActive', 'isSent', 'documents', 'created_at', 'updated_at')
                                       ->get();
                 
                 return response()->json([
@@ -1047,111 +1052,21 @@ class AuthController extends Controller
         ], 200);
     }
 
-    public function getOrganizationDashboardStats(Request $request)
+     // Driver-specific methods
+    public function getOrganizationDrivers(Request $request)
     {
-        $organizationId = $request->user()->id;
-        
-        $totalDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->count();
-        $totalClients = \App\Models\Client::where('organization_id', $organizationId)->count();
-        $totalRoutes = \App\Models\Route::where('organization_id', $organizationId)->count();
-        $activeDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->where('isActive', true)->count();
-        $activeClients = \App\Models\Client::where('organization_id', $organizationId)->where('isActive', true)->count();
-        
-        // Today's pickups
-        $today = \Carbon\Carbon::now()->toDateString();
-        $totalPickupsToday = \App\Models\Pickup::whereDate('pickup_date', $today)
-            ->whereHas('client', function($q) use ($organizationId) {
-                $q->where('organization_id', $organizationId);
-            })->count();
-        $completedPickupsToday = \App\Models\Pickup::whereDate('pickup_date', $today)
-            ->where('pickup_status', 'picked')
-            ->whereHas('client', function($q) use ($organizationId) {
-                $q->where('organization_id', $organizationId);
-            })->count();
-        $pendingPickupsToday = $totalPickupsToday - $completedPickupsToday;
-        
-        // Revenue calculations
-        $totalRevenue = \App\Models\Payment::where('organization_id', $organizationId)
-            ->where('status', '!=', 'not_allocated')
-            ->sum('allocated_amount');
-        $monthlyRevenue = \App\Models\Payment::where('organization_id', $organizationId)
-            ->where('status', '!=', 'not_allocated')
-            ->whereMonth('created_at', now()->month)
-            ->whereYear('created_at', now()->year)
-            ->sum('allocated_amount');
+        $organizationId = $request->user()->organization_id;
+        $drivers = User::where('role', 'driver')
+            ->where('organization_id', $organizationId)
+            ->where('isActive', true)
+            ->select('id', 'name', 'email', 'phone')
+            ->get();
         
         return response()->json([
             'status' => true,
-            'data' => [
-                'totalDrivers' => $totalDrivers,
-                'totalClients' => $totalClients,
-                'totalRoutes' => $totalRoutes,
-                'activeDrivers' => $activeDrivers,
-                'activeClients' => $activeClients,
-                'totalPickupsToday' => $totalPickupsToday,
-                'completedPickupsToday' => $completedPickupsToday,
-                'pendingPickupsToday' => $pendingPickupsToday,
-                'totalRevenue' => $totalRevenue,
-                'monthlyRevenue' => $monthlyRevenue
-            ]
+            'data' => $drivers
         ], 200);
     }
 
-    public function getRecentActivity(Request $request)
-    {
-        $organizationId = $request->user()->id;
-        $activities = [];
-        
-        // Recent pickups (last 24 hours)
-        $recentPickups = \App\Models\Pickup::with(['client.user', 'driver'])
-            ->where('pickup_status', 'picked')
-            ->whereHas('client', function($q) use ($organizationId) {
-                $q->where('organization_id', $organizationId);
-            })
-            ->where('picked_at', '>=', now()->subDay())
-            ->orderBy('picked_at', 'desc')
-            ->limit(5)
-            ->get();
-            
-        foreach ($recentPickups as $pickup) {
-            $activities[] = [
-                'type' => 'pickup_completed',
-                'message' => "Driver {$pickup->driver->name} completed pickup for {$pickup->client->user->name}",
-                'timestamp' => $pickup->picked_at,
-                'driver' => $pickup->driver->name,
-                'client' => $pickup->client->user->name
-            ];
-        }
-        
-        // Recent payments (last 24 hours)
-        $recentPayments = \App\Models\Payment::with('client')
-            ->where('organization_id', $organizationId)
-            ->where('created_at', '>=', now()->subDay())
-            ->orderBy('created_at', 'desc')
-            ->limit(5)
-            ->get();
-            
-        foreach ($recentPayments as $payment) {
-            $activities[] = [
-                'type' => 'payment_received',
-                'message' => "Payment of KSH " . number_format($payment->amount, 2) . " received from {$payment->client->name}",
-                'timestamp' => $payment->created_at,
-                'amount' => $payment->amount,
-                'client' => $payment->client->name
-            ];
-        }
-        
-        // Sort by timestamp descending
-        usort($activities, function($a, $b) {
-            return strtotime($b['timestamp']) - strtotime($a['timestamp']);
-        });
-        
-        return response()->json([
-            'status' => true,
-            'data' => [
-                'activities' => array_slice($activities, 0, 10)
-            ]
-        ], 200);
-    }
 }
 

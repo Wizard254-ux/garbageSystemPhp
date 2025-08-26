@@ -15,20 +15,36 @@ class HandleFileUploads
      */
     public function handle(Request $request, Closure $next): Response
     {
-        // Add logging to debug
-         \Log::info('HandleFileUploads middleware executed');
-        \Log::info('Request files:', $request->allFiles());
-        Log::info('HandleFileUploads middleware triggered');
 
-        if ($request->hasFile('documents')) {
-            $files = $request->file('documents');
-            
-            // Handle both single file and array of files
-            if (!is_array($files)) {
-                $files = [$files];
+        
+        // Check for files in different formats
+        $files = [];
+        
+        // Handle uploaded_documents[] format from frontend
+        if ($request->hasFile('uploaded_documents')) {
+            $uploadedFiles = $request->file('uploaded_documents');
+
+            if (is_array($uploadedFiles)) {
+                $files = array_merge($files, $uploadedFiles);
+            } else {
+                $files[] = $uploadedFiles;
             }
+        }
+        
+        if ($request->hasFile('documents')) {
+            $docFiles = $request->file('documents');
+            if (is_array($docFiles)) {
+                $files = array_merge($files, $docFiles);
+            } else {
+                $files[] = $docFiles;
+            }
+        }
+        
+
+        
+        if (!empty($files)) {
             
-            Log::info('Files found in request', ['file_count' => count($files)]);
+
             
             $filePaths = []; // initialize array
 
@@ -61,8 +77,13 @@ class HandleFileUploads
                         ], 422);
                     }
 
-                    // Store file and get URL
-                    $filePath = $file->store('documents', 'public');
+                    // Create custom filename with original name
+                    $originalName = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+                    $extension = $file->getClientOriginalExtension();
+                    $customFilename = time() . '_' . $originalName . '.' . $extension;
+                    
+                    // Store file with custom name
+                    $filePath = $file->storeAs('documents', $customFilename, 'public');
                     
                     if (!$filePath) {
                         return response()->json([
@@ -71,21 +92,21 @@ class HandleFileUploads
                         ], 500);
                     }
 
-                    // Get the authenticated URL
+                    // Store both URL and original name
                     $filename = basename($filePath);
                     $fullUrl = url('/api/storage/documents/' . $filename);
-                    $filePaths[] = $fullUrl;
-                    
-                    Log::info('File stored successfully', [
+                    $filePaths[] = [
+                        'url' => $fullUrl,
                         'original_name' => $file->getClientOriginalName(),
-                        'stored_path' => $filePath,
-                        'url' => $fullUrl
-                    ]);
+                        'filename' => $filename
+                    ];
+                    
+
                 }
 
-                // Inject file paths into request
-                $request->merge(['uploaded_documents' => $filePaths]);
-                Log::info('Files processed successfully', ['file_paths' => $filePaths]);
+                // Store processed files in a custom attribute
+                $request->attributes->set('processed_documents', $filePaths);
+
 
             } catch (\Exception $e) {
                 Log::error('Error processing file uploads', [
