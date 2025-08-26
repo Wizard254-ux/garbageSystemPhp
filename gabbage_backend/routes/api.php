@@ -169,8 +169,12 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     });
 });
 
-// Driver routes (for bag issuing and pickups)
+// Driver routes
 Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
+    Route::get('/dashboard', [AuthController::class, 'getDriverDashboard']);
+    Route::get('/stats', [AuthController::class, 'getDriverStats']);
+    Route::get('/drivers', [AuthController::class, 'getOrganizationDrivers']);
+    
     Route::prefix('bags')->group(function () {
         Route::get('/', [BagController::class, 'getDriverBags']);
         Route::get('/stats', [BagController::class, 'getDriverBagStats']);
@@ -186,10 +190,13 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
     Route::prefix('pickups')->group(function () {
         Route::post('/mark', [\App\Http\Controllers\PickupController::class, 'markPickup']);
         Route::get('/', [\App\Http\Controllers\PickupController::class, 'getPickups']);
+        Route::get('/all/picked', [\App\Http\Controllers\PickupController::class, 'getAllPicked']);
+        Route::get('/all/unpicked', [\App\Http\Controllers\PickupController::class, 'getAllUnpicked']);
         Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getClientsToPickup']);
     });
     
     Route::prefix('routes')->group(function () {
+        Route::post('/', [RouteController::class, 'manageDriverRoutes']);
         Route::post('/activate', [\App\Http\Controllers\PickupController::class, 'activateRoute']);
         Route::post('/deactivate', [\App\Http\Controllers\PickupController::class, 'deactivateRoute']);
         Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);

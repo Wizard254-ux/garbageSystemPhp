@@ -944,5 +944,21 @@ class AuthController extends Controller
             'data' => ['organization' => $user]
         ], 200);
     }
+
+    // Driver-specific methods
+    public function getOrganizationDrivers(Request $request)
+    {
+        $organizationId = $request->user()->organization_id;
+        $drivers = User::where('role', 'driver')
+            ->where('organization_id', $organizationId)
+            ->where('isActive', true)
+            ->select('id', 'name', 'email', 'phone')
+            ->get();
+        
+        return response()->json([
+            'status' => true,
+            'data' => $drivers
+        ], 200);
+    }
 }
 
