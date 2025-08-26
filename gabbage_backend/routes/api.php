@@ -14,14 +14,59 @@ use App\Http\Controllers\PaymentController;
 
 // Protected file access
 Route::get('/storage/documents/{filename}', function (Request $request, $filename) {
-    $user = $request->user();
-    $fileUrl = url('/api/storage/documents/' . $filename);
+    // Check for token in query parameter or Authorization header
+    $token = $request->query('token') ?? $request->bearerToken();
     
-    // Check if user owns this file (check both URL formats)
+    if (!$token) {
+        return response()->json(['status' => false, 'error' => 'Unauthorized', 'message' => 'Access token is required'], 401);
+    }
+    
+    // Authenticate user with token
+    $user = \Laravel\Sanctum\PersonalAccessToken::findToken($token)?->tokenable;
+    
+    if (!$user) {
+        return response()->json(['status' => false, 'error' => 'Unauthorized', 'message' => 'Invalid token'], 401);
+    }
+    
+    $fileUrl = url('/api/storage/documents/' . $filename);
     $oldUrl = url('/storage/documents/' . $filename);
     $userDocuments = $user->documents ?? [];
     
-    if (!in_array($fileUrl, $userDocuments) && !in_array($oldUrl, $userDocuments)) {
+    // Check if user owns this file directly
+    $hasAccess = in_array($fileUrl, $userDocuments) || in_array($oldUrl, $userDocuments);
+    
+    // If organization, also check if any of their drivers/clients own this file
+    if (!$hasAccess && $user->role === 'organization') {
+        // Check drivers
+        $organizationUsers = \App\Models\User::where('organization_id', $user->id)
+            ->where('role', 'driver')
+            ->get();
+        
+        foreach ($organizationUsers as $orgUser) {
+            $orgUserDocuments = $orgUser->documents ?? [];
+            if (in_array($fileUrl, $orgUserDocuments) || in_array($oldUrl, $orgUserDocuments)) {
+                $hasAccess = true;
+                break;
+            }
+        }
+        
+        // Check clients (they have different relationship structure)
+        if (!$hasAccess) {
+            $clients = \App\Models\Client::where('organization_id', $user->id)->with('user')->get();
+            
+            foreach ($clients as $client) {
+                if ($client->user) {
+                    $clientUserDocuments = $client->user->documents ?? [];
+                    if (in_array($fileUrl, $clientUserDocuments) || in_array($oldUrl, $clientUserDocuments)) {
+                        $hasAccess = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    if (!$hasAccess) {
         abort(403, 'Unauthorized access to file');
     }
     
@@ -30,7 +75,7 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
         abort(404);
     }
     return response()->file($path);
-})->middleware('auth:sanctum');
+});
 
 // Auth routes
 Route::prefix('auth')->group(function () {
@@ -47,6 +92,7 @@ Route::prefix('auth')->group(function () {
     
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
+        Route::post('/refresh-token', [AuthController::class, 'refreshToken']);
         Route::post('/create-organization', [AuthController::class, 'createOrganization'])->middleware(['admin.only', 'file.uploads']);
         Route::post('/organization/manage', [AuthController::class, 'manageOrganization'])->middleware('admin.only');
     });
@@ -55,7 +101,7 @@ Route::prefix('auth')->group(function () {
 // Organization routes (for logged-in organizations)
 Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])->group(function () {
     // Dashboard
-    Route::get('/dashboard/stats', [AuthController::class, 'getOrganizationStats']);
+    Route::get('/dashboard/counts', [AuthController::class, 'getDashboardCounts']);
     
     // Drivers management
     Route::prefix('drivers')->group(function () {
@@ -72,6 +118,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     // Clients management
     Route::prefix('clients')->group(function () {
         Route::get('/', [ClientController::class, 'index']);
+        Route::get('/search', [ClientController::class, 'search']);
         Route::post('/', [ClientController::class, 'store'])->middleware('file.uploads');
         Route::get('/{id}', [ClientController::class, 'show']);
         Route::put('/{id}', [ClientController::class, 'update'])->middleware('file.uploads');
@@ -104,6 +151,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     Route::prefix('invoices')->group(function () {
         Route::get('/', [InvoiceController::class, 'index']);
         Route::post('/', [InvoiceController::class, 'store']);
+        Route::get('/aging-summary', [InvoiceController::class, 'getAgingSummary']);
         Route::get('/{id}', [InvoiceController::class, 'show']);
         Route::post('/resend', [InvoiceController::class, 'resendInvoices']);
     });
@@ -124,6 +172,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     // Pickups management
     Route::prefix('pickups')->group(function () {
         Route::get('/', [\App\Http\Controllers\PickupController::class, 'getPickups']);
+        Route::post('/', [\App\Http\Controllers\PickupController::class, 'createPickup']);
         Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getClientsToPickup']);
     });
 });
@@ -148,6 +197,12 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
         Route::post('/deactivate', [\App\Http\Controllers\PickupController::class, 'deactivateRoute']);
         Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);
     });
+    
+    // Dashboard endpoints
+    Route::get('/stats', [\App\Http\Controllers\Auth\AuthController::class, 'getOrganizationDashboardStats']);
+    Route::get('/recent-activity', [\App\Http\Controllers\Auth\AuthController::class, 'getRecentActivity']);
+    Route::get('/pickups/today-summary', [\App\Http\Controllers\PickupController::class, 'getTodayPickupsSummary']);
+    Route::get('/financial-summary', [\App\Http\Controllers\PaymentController::class, 'getFinancialSummary']);
 });
 
 // M-Pesa Callback (no auth required)

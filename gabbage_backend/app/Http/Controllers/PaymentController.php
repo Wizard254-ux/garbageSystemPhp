@@ -13,10 +13,25 @@ class PaymentController extends Controller
     public function index(Request $request)
     {
         $organizationId = $request->user()->id;
-        $payments = Payment::where('organization_id', $organizationId)
-            ->with('client')
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $query = Payment::where('organization_id', $organizationId)
+            ->with('client');
+
+        // Add search functionality
+        if ($request->has('search') && !empty($request->search)) {
+            $searchTerm = $request->search;
+            $query->where(function($q) use ($searchTerm) {
+                $q->where('account_number', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('phone_number', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('first_name', 'like', '%' . $searchTerm . '%')
+                  ->orWhere('last_name', 'like', '%' . $searchTerm . '%')
+                  ->orWhereHas('client', function($clientQuery) use ($searchTerm) {
+                      $clientQuery->where('name', 'like', '%' . $searchTerm . '%')
+                                  ->orWhere('phone', 'like', '%' . $searchTerm . '%');
+                  });
+            });
+        }
+
+        $payments = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json([
             'status' => true,
@@ -190,6 +205,17 @@ class PaymentController extends Controller
             ->orderBy('created_at', 'desc')
             ->get();
 
+        // Transform payments to include invoice numbers instead of IDs
+        $payments->transform(function ($payment) {
+            if (!empty($payment->invoices_processed)) {
+                $invoiceNumbers = Invoice::whereIn('id', $payment->invoices_processed)
+                    ->pluck('invoice_number')
+                    ->toArray();
+                $payment->invoices_processed = $invoiceNumbers;
+            }
+            return $payment;
+        });
+
         return response()->json([
             'status' => true,
             'data' => ['payments' => $payments]
@@ -305,5 +331,63 @@ class PaymentController extends Controller
                 'message' => 'Failed to record payment: ' . $e->getMessage()
             ], 500);
         }
+    }
+
+    public function getFinancialSummary(Request $request)
+    {
+        $organizationId = $request->user()->id;
+        
+        // Total revenue (all time)
+        $totalRevenue = Payment::where('organization_id', $organizationId)
+            ->where('status', '!=', 'not_allocated')
+            ->sum('allocated_amount');
+            
+        // Monthly revenue (current month)
+        $monthlyRevenue = Payment::where('organization_id', $organizationId)
+            ->where('status', '!=', 'not_allocated')
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('allocated_amount');
+            
+        // Pending payments (unallocated amounts)
+        $pendingPayments = Payment::where('organization_id', $organizationId)
+            ->where('remaining_amount', '>', 0)
+            ->sum('remaining_amount');
+            
+        // Overdue invoices
+        $overdueInvoices = \App\Models\Invoice::whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })
+            ->where('due_date', '<', now())
+            ->where('payment_status', '!=', 'fully_paid')
+            ->count();
+            
+        // Paid invoices this month
+        $paidInvoicesThisMonth = \App\Models\Invoice::whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })
+            ->where('payment_status', 'fully_paid')
+            ->whereMonth('updated_at', now()->month)
+            ->whereYear('updated_at', now()->year)
+            ->count();
+            
+        // Outstanding balance
+        $outstandingBalance = \App\Models\Invoice::whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })
+            ->whereIn('payment_status', ['unpaid', 'partially_paid'])
+            ->sum('remaining_balance');
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'totalRevenue' => $totalRevenue,
+                'monthlyRevenue' => $monthlyRevenue,
+                'pendingPayments' => $pendingPayments,
+                'overdueInvoices' => $overdueInvoices,
+                'paidInvoicesThisMonth' => $paidInvoicesThisMonth,
+                'outstandingBalance' => $outstandingBalance
+            ]
+        ], 200);
     }
 }

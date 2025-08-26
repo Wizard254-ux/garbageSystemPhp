@@ -13,32 +13,64 @@ class ClientController extends Controller
     public function index(Request $request)
     {
         $organizationId = $request->user()->id;
-        $clients = Client::where('organization_id', $organizationId)
-            ->with(['user', 'route'])
-            ->get()
-            ->map(function($client) {
-                return [
-                    'id' => $client->user->id,
-                    'name' => $client->user->name,
-                    'email' => $client->user->email,
-                    'phone' => $client->user->phone,
-                    'address' => $client->user->adress,
-                    'isActive' => $client->user->isActive ?? true,
-                    'accountNumber' => $client->accountNumber,
-                    'clientType' => $client->clientType,
-                    'monthlyRate' => $client->monthlyRate,
-                    'numberOfUnits' => $client->numberOfUnits,
-                    'pickUpDay' => $client->pickUpDay,
-                    'gracePeriod' => $client->gracePeriod,
-                    'serviceStartDate' => $client->serviceStartDate,
-                    'route' => $client->route,
-                    'documents' => $client->user->documents ?? []
-                ];
-            });
+        $page = $request->get('page', 1);
+        $limit = $request->get('limit', 20);
+        $search = $request->get('search', '');
+        
+        $query = Client::where('organization_id', $organizationId)
+            ->with(['user', 'route']);
+            
+        // Add search functionality
+        if (!empty($search)) {
+            $query->whereHas('user', function($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('email', 'LIKE', '%' . $search . '%')
+                  ->orWhere('phone', 'LIKE', '%' . $search . '%');
+            })->orWhere('accountNumber', 'LIKE', '%' . $search . '%');
+        }
+        
+        // Get total count for pagination
+        $totalClients = $query->count();
+        $totalPages = ceil($totalClients / $limit);
+        
+        // Apply pagination and ordering
+        $clients = $query->orderBy('created_at', 'desc')
+                        ->skip(($page - 1) * $limit)
+                        ->take($limit)
+                        ->get()
+                        ->map(function($client) {
+                            return [
+                                'id' => $client->user->id,
+                                'name' => $client->user->name,
+                                'email' => $client->user->email,
+                                'phone' => $client->user->phone,
+                                'address' => $client->user->address,
+                                'isActive' => $client->user->isActive ?? true,
+                                'accountNumber' => $client->accountNumber,
+                                'clientType' => $client->clientType,
+                                'monthlyRate' => $client->monthlyRate,
+                                'numberOfUnits' => $client->numberOfUnits,
+                                'pickUpDay' => $client->pickUpDay,
+                                'gracePeriod' => $client->gracePeriod,
+                                'serviceStartDate' => $client->serviceStartDate,
+                                'route' => $client->route,
+                                'documents' => $client->user->documents ?? []
+                            ];
+                        });
 
         return response()->json([
             'status' => true,
-            'data' => ['users' => $clients]
+            'data' => [
+                'users' => $clients,
+                'pagination' => [
+                    'currentPage' => (int)$page,
+                    'totalPages' => $totalPages,
+                    'totalItems' => $totalClients,
+                    'itemsPerPage' => (int)$limit,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]
         ], 200);
     }
 
@@ -77,7 +109,7 @@ class ClientController extends Controller
             'password' => Hash::make('password123'), // Default password
             'role' => 'client',
             'phone' => $request->phone,
-            'adress' => $request->address,
+            'address' => $request->address,
             'documents' => $request->uploaded_documents ?? []
         ]);
 
@@ -94,10 +126,29 @@ class ClientController extends Controller
             'serviceStartDate' => $request->serviceStartDate
         ]);
 
+        // Format the response similar to the list format
+        $clientData = [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'phone' => $user->phone,
+            'address' => $user->address,
+            'isActive' => $user->isActive ?? true,
+            'accountNumber' => $client->accountNumber,
+            'clientType' => $client->clientType,
+            'monthlyRate' => $client->monthlyRate,
+            'numberOfUnits' => $client->numberOfUnits,
+            'pickUpDay' => $client->pickUpDay,
+            'gracePeriod' => $client->gracePeriod,
+            'serviceStartDate' => $client->serviceStartDate,
+            'route' => $client->route,
+            'documents' => $user->documents ?? []
+        ];
+
         return response()->json([
             'status' => true,
             'message' => 'Client created successfully',
-            'data' => ['client' => $client->load(['user', 'route'])]
+            'data' => ['client' => $clientData]
         ], 200);
     }
 
@@ -198,7 +249,7 @@ class ClientController extends Controller
         if ($request->has('name')) $userUpdateData['name'] = $request->name;
         if ($request->has('email')) $userUpdateData['email'] = $request->email;
         if ($request->has('phone')) $userUpdateData['phone'] = $request->phone;
-        if ($request->has('address')) $userUpdateData['adress'] = $request->address;
+        if ($request->has('address')) $userUpdateData['address'] = $request->address;
         if ($request->has('isActive')) $userUpdateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
         $userUpdateData['documents'] = $allDocuments;
         
@@ -304,5 +355,69 @@ class ClientController extends Controller
         ], 200);
     }
 
-
+    public function search(Request $request)
+    {
+        \Log::info('=== CLIENT SEARCH START ===');
+        \Log::info('Search params:', $request->all());
+        
+        $organizationId = $request->user()->id;
+        
+        $validator = Validator::make($request->all(), [
+            'name' => 'nullable|string|min:2'
+        ]);
+        
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+        
+        try {
+            $query = Client::where('organization_id', $organizationId)
+                ->with(['user', 'route']);
+            
+            if ($request->has('name') && !empty($request->name)) {
+                $query->whereHas('user', function($q) use ($request) {
+                    $q->where('name', 'like', '%' . $request->name . '%');
+                });
+            }
+            
+            $clients = $query->get()->map(function($client) {
+                return [
+                    'id' => $client->user->id,
+                    'name' => $client->user->name,
+                    'email' => $client->user->email,
+                    'phone' => $client->user->phone,
+                    'address' => $client->user->adress,
+                    'accountNumber' => $client->accountNumber,
+                    'route' => $client->route
+                ];
+            });
+            
+            $response = [
+                'status' => true,
+                'data' => ['users' => $clients]
+            ];
+            
+            \Log::info('🔍 Client search response:', $response);
+            return response()->json($response, 200);
+            
+        } catch (\Exception $e) {
+            \Log::error('Client search failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+            
+            return response()->json([
+                'status' => false,
+                'error' => 'Search failed',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

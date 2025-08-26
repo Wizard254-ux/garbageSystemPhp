@@ -77,6 +77,29 @@ class AuthController extends Controller
         ],200);
     }
 
+    public function refreshToken(Request $request)
+    {
+        $user = $request->user();
+        
+        // Delete current token
+        $request->user()->currentAccessToken()->delete();
+        
+        // Create new token
+        $token = $user->createToken('authToken');
+        $token->accessToken->expires_at = now()->addHours(2);
+        $token->accessToken->save();
+        
+        return response()->json([
+            'status' => true,
+            'message' => 'Token refreshed successfully',
+            'data' => [
+                'access_token' => $token->plainTextToken,
+                'token_type' => 'Bearer',
+                'user' => $user
+            ]
+        ], 200);
+    }
+
     public function Register(Request $request)
     {
         $validator=Validator($request->all(),[
@@ -85,7 +108,7 @@ class AuthController extends Controller
             'password'=>'required|string|min:6|max:20',
             'role'=>'required|in:client,driver',
             'phone'=>'nullable|string|max:20',
-            'adress'=>'nullable|string|max:255',
+            'address'=>'nullable|string|max:255',
             'uploaded_documents'=>'nullable|array',
         ]);
 
@@ -96,7 +119,7 @@ class AuthController extends Controller
                 'password'=>Hash::make($request->password),
                 'role'=>$request->role,
                 'phone'=>$request->phone,
-                'adress'=>$request->adress,
+                'address'=>$request->address,
                 'documents'=>$request->uploaded_documents ?? []
             ]);
             $tokenResult=$user->createToken('authToken')->plainTextToken;
@@ -156,7 +179,7 @@ class AuthController extends Controller
             'name'=>'required|string|max:255',
             'email'=>'required|email|unique:users,email',
             'phone'=>'nullable|string|max:20',
-            'adress'=>'nullable|string|max:255',
+            'address'=>'nullable|string|max:255',
             'uploaded_documents'=>'nullable|array',
         ]);
 
@@ -169,7 +192,7 @@ class AuthController extends Controller
                 'password'=>Hash::make($randomPassword),
                 'role'=>'organization',
                 'phone'=>$request->phone,
-                'adress'=>$request->adress,
+                'address'=>$request->address,
                 'documents'=>$request->uploaded_documents ?? []
             ]);
             
@@ -313,7 +336,7 @@ class AuthController extends Controller
                     }
                 }
                 
-                $user->update(array_intersect_key($updateData, array_flip(['name', 'email', 'phone', 'adress'])));
+                $user->update(array_intersect_key($updateData, array_flip(['name', 'email', 'phone', 'address'])));
                 
                 return response()->json([
                     'status'=>true,
@@ -374,7 +397,7 @@ class AuthController extends Controller
                     'name'=>$user->name,
                     'email'=>$user->email,
                     'phone'=>$user->phone,
-                    'adress'=>$user->adress,
+                    'address'=>$user->address,
                     'role'=>$user->role,
                     'isActive'=>true,
                     'isSent'=>true,
@@ -418,36 +441,107 @@ class AuthController extends Controller
     }
 
     // Organization-specific methods
-    public function getOrganizationStats(Request $request)
+    public function getDashboardCounts(Request $request)
     {
         $organizationId = $request->user()->id;
         
-        $totalDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->count();
-        $totalClients = User::where('role', 'client')->where('organization_id', $organizationId)->count();
-        $activeDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->where('isActive', true)->count();
-        $activeClients = User::where('role', 'client')->where('organization_id', $organizationId)->where('isActive', true)->count();
+        // Get driver counts from users table
+        $driverCounts = \DB::select("
+            SELECT 
+                COUNT(CASE WHEN role = 'driver' THEN 1 END) as totalDrivers,
+                COUNT(CASE WHEN role = 'driver' AND isActive = 1 THEN 1 END) as activeDrivers
+            FROM users 
+            WHERE organization_id = ? AND role = 'driver'
+        ", [$organizationId]);
+
+        // Get client counts from clients table (joined with users for isActive status)
+        $clientCounts = \DB::select("
+            SELECT 
+                COUNT(c.id) as totalClients,
+                COUNT(CASE WHEN u.isActive = 1 OR u.isActive IS NULL THEN 1 END) as activeClients
+            FROM clients c
+            LEFT JOIN users u ON c.user_id = u.id
+            WHERE c.organization_id = ?
+        ", [$organizationId]);
+
+        // Get routes count
+        $totalRoutes = \App\Models\Route::where('organization_id', $organizationId)->count();
+        
+        $driverResult = $driverCounts[0] ?? (object)['totalDrivers' => 0, 'activeDrivers' => 0];
+        $clientResult = $clientCounts[0] ?? (object)['totalClients' => 0, 'activeClients' => 0];
         
         return response()->json([
-            'status'=>true,
-            'data'=>[
-                'totalDrivers'=>$totalDrivers,
-                'totalClients'=>$totalClients,
-                'totalRoutes'=>0,
-                'activeDrivers'=>$activeDrivers,
-                'activeClients'=>$activeClients
+            'status' => true,
+            'data' => [
+                'totalDrivers' => (int)$driverResult->totalDrivers,
+                'totalClients' => (int)$clientResult->totalClients,
+                'totalRoutes' => $totalRoutes,
+                'activeDrivers' => (int)$driverResult->activeDrivers,
+                'activeClients' => (int)$clientResult->activeClients
             ]
-        ],200);
+        ], 200);
     }
 
     public function listOrganizationDrivers(Request $request)
     {
         $organizationId = $request->user()->id;
-        $drivers = User::where('role', 'driver')->where('organization_id', $organizationId)->get();
+        $page = $request->get('page', 1);
+        $limit = $request->get('limit', 20);
+        $search = $request->get('search', '');
+        
+        $query = User::where('role', 'driver')->where('organization_id', $organizationId);
+        
+        // Add search functionality
+        if (!empty($search)) {
+            $query->where(function($q) use ($search) {
+                $q->where('name', 'LIKE', '%' . $search . '%')
+                  ->orWhere('email', 'LIKE', '%' . $search . '%')
+                  ->orWhere('phone', 'LIKE', '%' . $search . '%');
+            });
+        }
+        
+        // Get total count for pagination
+        $totalDrivers = $query->count();
+        $totalPages = ceil($totalDrivers / $limit);
+        
+        // Apply pagination
+        $drivers = $query->orderBy('created_at', 'desc')
+                        ->skip(($page - 1) * $limit)
+                        ->take($limit)
+                        ->get();
+        
+        // Add active route information and bag allocation for each driver
+        $drivers->each(function ($driver) {
+            $activeRoute = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driver->id)
+                ->where('is_active', true)
+                ->first();
+            
+            $driver->active_route = $activeRoute ? [
+                'id' => $activeRoute->route->id,
+                'name' => $activeRoute->route->name,
+                'activated_at' => $activeRoute->activated_at
+            ] : null;
+            
+            // Add bag allocation
+            $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $driver->id)->first();
+            $driver->allocated_bags = $bagAllocation ? $bagAllocation->available_bags : 0;
+        });
         
         return response()->json([
-            'status'=>true,
-            'data'=>['users'=>$drivers]
-        ],200);
+            'status' => true,
+            'data' => [
+                'users' => $drivers,
+                'pagination' => [
+                    'currentPage' => (int)$page,
+                    'totalPages' => $totalPages,
+                    'totalItems' => $totalDrivers,
+                    'itemsPerPage' => (int)$limit,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]
+        ], 200);
     }
 
     public function listOrganizationClients(Request $request)
@@ -552,9 +646,15 @@ class AuthController extends Controller
             ], 404);
         }
 
+        // Get driver bag allocation
+        $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        
+        $driverData = $driver->toArray();
+        $driverData['allocated_bags'] = $bagAllocation ? $bagAllocation->available_bags : 0;
+
         return response()->json([
             'status' => true,
-            'data' => ['driver' => $driver]
+            'data' => ['driver' => $driverData]
         ], 200);
     }
 
@@ -582,6 +682,7 @@ class AuthController extends Controller
             'name' => 'nullable|string|max:255',
             'email' => 'nullable|email|unique:users,email,' . $id,
             'phone' => 'nullable|string|max:20',
+            'address' => 'nullable|string|max:255',
             'isActive' => 'nullable|in:true,false,1,0',
             'uploaded_documents' => 'nullable|array'
         ]);
@@ -607,6 +708,7 @@ class AuthController extends Controller
         if ($request->has('name')) $updateData['name'] = $request->name;
         if ($request->has('email')) $updateData['email'] = $request->email;
         if ($request->has('phone')) $updateData['phone'] = $request->phone;
+        if ($request->has('address')) $updateData['address'] = $request->address;
         if ($request->has('isActive')) $updateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
         $updateData['documents'] = $allDocuments;
 
@@ -717,6 +819,11 @@ class AuthController extends Controller
         try {
             Mail::to($driver->email)->send(new \App\Mail\DriverCredentials($driver->email, $newPassword, $driver->name));
             \Log::info('Email sent successfully to driver');
+            
+            // Mark as sent
+            $driver->isSent = 1;
+            $driver->save();
+            \Log::info('Driver isSent status updated to true');
         } catch (\Exception $e) {
             \Log::error('Failed to send email:', ['error' => $e->getMessage()]);
         }
@@ -822,7 +929,7 @@ class AuthController extends Controller
         $organizations = $query->orderBy($sortBy, $sortOrder)
                               ->skip(($page - 1) * $limit)
                               ->take($limit)
-                              ->select('id', 'name', 'email', 'phone', 'adress', 'isActive', 'isSent', 'created_at', 'updated_at')
+                              ->select('id', 'name', 'email', 'phone', 'address', 'isActive', 'isSent', 'created_at', 'updated_at')
                               ->get();
         
         // Transform data to match frontend expectations
@@ -832,7 +939,7 @@ class AuthController extends Controller
                 'name' => $org->name,
                 'email' => $org->email,
                 'phone' => $org->phone,
-                'adress' => $org->adress,
+                'address' => $org->address,
                 'isActive' => (bool)$org->isActive,
                 'isSent' => (bool)$org->isSent,
                 'createdAt' => $org->created_at->toISOString(),
@@ -937,6 +1044,113 @@ class AuthController extends Controller
             'status' => true,
             'message' => "Organization {$action} successfully",
             'data' => ['organization' => $user]
+        ], 200);
+    }
+
+    public function getOrganizationDashboardStats(Request $request)
+    {
+        $organizationId = $request->user()->id;
+        
+        $totalDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->count();
+        $totalClients = \App\Models\Client::where('organization_id', $organizationId)->count();
+        $totalRoutes = \App\Models\Route::where('organization_id', $organizationId)->count();
+        $activeDrivers = User::where('role', 'driver')->where('organization_id', $organizationId)->where('isActive', true)->count();
+        $activeClients = \App\Models\Client::where('organization_id', $organizationId)->where('isActive', true)->count();
+        
+        // Today's pickups
+        $today = \Carbon\Carbon::now()->toDateString();
+        $totalPickupsToday = \App\Models\Pickup::whereDate('pickup_date', $today)
+            ->whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })->count();
+        $completedPickupsToday = \App\Models\Pickup::whereDate('pickup_date', $today)
+            ->where('pickup_status', 'picked')
+            ->whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })->count();
+        $pendingPickupsToday = $totalPickupsToday - $completedPickupsToday;
+        
+        // Revenue calculations
+        $totalRevenue = \App\Models\Payment::where('organization_id', $organizationId)
+            ->where('status', '!=', 'not_allocated')
+            ->sum('allocated_amount');
+        $monthlyRevenue = \App\Models\Payment::where('organization_id', $organizationId)
+            ->where('status', '!=', 'not_allocated')
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('allocated_amount');
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'totalDrivers' => $totalDrivers,
+                'totalClients' => $totalClients,
+                'totalRoutes' => $totalRoutes,
+                'activeDrivers' => $activeDrivers,
+                'activeClients' => $activeClients,
+                'totalPickupsToday' => $totalPickupsToday,
+                'completedPickupsToday' => $completedPickupsToday,
+                'pendingPickupsToday' => $pendingPickupsToday,
+                'totalRevenue' => $totalRevenue,
+                'monthlyRevenue' => $monthlyRevenue
+            ]
+        ], 200);
+    }
+
+    public function getRecentActivity(Request $request)
+    {
+        $organizationId = $request->user()->id;
+        $activities = [];
+        
+        // Recent pickups (last 24 hours)
+        $recentPickups = \App\Models\Pickup::with(['client.user', 'driver'])
+            ->where('pickup_status', 'picked')
+            ->whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })
+            ->where('picked_at', '>=', now()->subDay())
+            ->orderBy('picked_at', 'desc')
+            ->limit(5)
+            ->get();
+            
+        foreach ($recentPickups as $pickup) {
+            $activities[] = [
+                'type' => 'pickup_completed',
+                'message' => "Driver {$pickup->driver->name} completed pickup for {$pickup->client->user->name}",
+                'timestamp' => $pickup->picked_at,
+                'driver' => $pickup->driver->name,
+                'client' => $pickup->client->user->name
+            ];
+        }
+        
+        // Recent payments (last 24 hours)
+        $recentPayments = \App\Models\Payment::with('client')
+            ->where('organization_id', $organizationId)
+            ->where('created_at', '>=', now()->subDay())
+            ->orderBy('created_at', 'desc')
+            ->limit(5)
+            ->get();
+            
+        foreach ($recentPayments as $payment) {
+            $activities[] = [
+                'type' => 'payment_received',
+                'message' => "Payment of KSH " . number_format($payment->amount, 2) . " received from {$payment->client->name}",
+                'timestamp' => $payment->created_at,
+                'amount' => $payment->amount,
+                'client' => $payment->client->name
+            ];
+        }
+        
+        // Sort by timestamp descending
+        usort($activities, function($a, $b) {
+            return strtotime($b['timestamp']) - strtotime($a['timestamp']);
+        });
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'activities' => array_slice($activities, 0, 10)
+            ]
         ], 200);
     }
 }

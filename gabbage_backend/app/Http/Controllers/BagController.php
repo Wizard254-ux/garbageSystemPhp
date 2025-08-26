@@ -163,14 +163,38 @@ class BagController extends Controller
             $bag->decrement('available_bags', $request->number_of_bags);
             $bag->increment('allocated_bags', $request->number_of_bags);
 
-            // Update driver allocation
-            $allocation = DriverBagsAllocation::firstOrCreate(
-                ['organization_id' => $organizationId, 'driver_id' => $request->driver_id],
-                ['allocated_bags' => 0, 'used_bags' => 0, 'available_bags' => 0]
-            );
+            // Get current active allocation (status = 1)
+            $currentAllocation = DriverBagsAllocation::where('organization_id', $organizationId)
+                ->where('driver_id', $request->driver_id)
+                ->where('status', 1)
+                ->first();
 
-            $allocation->increment('allocated_bags', $request->number_of_bags);
-            $allocation->increment('available_bags', $request->number_of_bags);
+            if ($currentAllocation) {
+                // Mark current allocation as previous (status = 0)
+                $currentAllocation->update(['status' => 0]);
+                
+                // Create new allocation with updated bags
+                DriverBagsAllocation::create([
+                    'organization_id' => $organizationId,
+                    'driver_id' => $request->driver_id,
+                    'allocated_bags' => $currentAllocation->allocated_bags + $request->number_of_bags,
+                    'used_bags' => $currentAllocation->used_bags,
+                    'available_bags' => $currentAllocation->available_bags + $request->number_of_bags,
+                    'bags_from_previous' => $currentAllocation->available_bags,
+                    'status' => 1
+                ]);
+            } else {
+                // Create first allocation for driver
+                DriverBagsAllocation::create([
+                    'organization_id' => $organizationId,
+                    'driver_id' => $request->driver_id,
+                    'allocated_bags' => $request->number_of_bags,
+                    'used_bags' => 0,
+                    'available_bags' => $request->number_of_bags,
+                    'bags_from_previous' => 0,
+                    'status' => 1
+                ]);
+            }
 
             // Log the activity
             ActivityLog::create([
@@ -182,8 +206,7 @@ class BagController extends Controller
                     'bags_allocated' => $request->number_of_bags,
                     'driver_id' => $request->driver_id,
                     'driver_name' => $driver->name,
-                    'organization_available' => $bag->fresh()->available_bags,
-                    'driver_total' => $allocation->fresh()->available_bags
+                    'organization_available' => $bag->fresh()->available_bags
                 ]
             ]);
         });
@@ -195,7 +218,8 @@ class BagController extends Controller
                 'organization_bags' => $bag->fresh(),
                 'driver_allocation' => DriverBagsAllocation::where('organization_id', $organizationId)
                     ->where('driver_id', $request->driver_id)
-                    ->with('driver:id,name')
+                    ->where('status', 1)
+                    ->with('driver:id,name,phone')
                     ->first()
             ]
         ], 200);
@@ -266,12 +290,44 @@ class BagController extends Controller
     // Get organization bags overview
     public function getOrganizationBags(Request $request)
     {
+        \Log::info('=== GET ORGANIZATION BAGS START ===');
+        \Log::info('Request params:', $request->all());
+        
         $organizationId = $request->user()->id;
+        \Log::info('Organization ID:', ['org_id' => $organizationId]);
         
         $bags = Bag::where('organization_id', $organizationId)->first();
-        $driverAllocations = DriverBagsAllocation::where('organization_id', $organizationId)
-            ->with('driver:id,name')
+        
+        $query = DriverBagsAllocation::where('organization_id', $organizationId)
+            ->with('driver:id,name,phone');
+        
+        // Add search functionality for driver allocations (by driver name only)
+        \Log::info('Search parameter check:', [
+            'has_search' => $request->has('search'),
+            'search_value' => $request->search,
+            'search_empty' => empty(trim($request->search ?? '')),
+            'all_params' => $request->all()
+        ]);
+        
+        if ($request->has('search') && !empty(trim($request->search))) {
+            $searchTerm = trim($request->search);
+            \Log::info('APPLYING SEARCH FILTER with term:', ['search' => $searchTerm]);
+            
+            $query->whereHas('driver', function($driverQuery) use ($searchTerm) {
+                $driverQuery->where('name', 'like', '%' . $searchTerm . '%');
+            });
+            
+            \Log::info('Search query applied successfully');
+        } else {
+            \Log::info('NO SEARCH FILTER APPLIED - returning all results');
+        }
+        
+        $driverAllocations = $query->orderBy('status', 'desc')
+            ->orderBy('created_at', 'desc')
             ->get();
+            
+        \Log::info('Driver allocations found:', ['count' => $driverAllocations->count()]);
+        \Log::info('=== GET ORGANIZATION BAGS END ===');
 
         return response()->json([
             'status' => true,

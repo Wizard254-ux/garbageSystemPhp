@@ -61,6 +61,29 @@ class PickupController extends Controller
                 'route_id' => $client->route_id
             ]);
 
+            // Check if driver is active on the client's route
+            $driverRouteActive = \App\Models\DriverRoute::where('driver_id', $driverId)
+                ->where('route_id', $client->route_id)
+                ->where('is_active', true)
+                ->first();
+
+            if (!$driverRouteActive) {
+                \Log::warning('Driver not active on client route:', [
+                    'driver_id' => $driverId,
+                    'client_route_id' => $client->route_id
+                ]);
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Not active on route',
+                    'message' => 'Driver is not active on the route for this client'
+                ], 403);
+            }
+
+            \Log::info('Driver is active on client route:', [
+                'driver_id' => $driverId,
+                'route_id' => $client->route_id
+            ]);
+
             // Check if pickup already exists for this week
             $existingPickup = Pickup::where('client_id', $clientId)
                 ->whereBetween('pickup_date', [$weekStart, $weekEnd])
@@ -173,8 +196,11 @@ class PickupController extends Controller
             'date' => 'nullable|date',
             'start_date' => 'nullable|date',
             'end_date' => 'nullable|date|after_or_equal:start_date',
-            'status' => 'nullable|in:picked,unpicked,skipped',
-            'week' => 'nullable|in:current,this'
+            'status' => 'nullable|in:picked,unpicked,skipped,scheduled',
+            'week' => 'nullable|in:current,this',
+            'driver_id' => 'nullable|string',
+            'route_id' => 'nullable|exists:routes,id',
+            'pickup_day' => 'nullable|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'
         ]);
 
         if ($validator->fails()) {
@@ -213,9 +239,14 @@ class PickupController extends Controller
             ]);
 
             // For today's unpicked or week filter - check clients who should be picked but aren't in pickup table
+            // Only do this if no other filters are applied (driver_id, route_id, pickup_day)
             if (($requestedDate === $today && (!$status || $status === 'unpicked')) || ($week && $status === 'unpicked')) {
-                \Log::info('Getting unpicked clients...');
-                $unpickedClients = $week ? $this->getWeekUnpickedClients() : $this->getTodaysUnpickedClients();
+                // Skip unpicked logic if other filters are applied
+                if ($request->has('driver_id') || $request->has('route_id') || $request->has('pickup_day')) {
+                    // Continue to regular pickup table query
+                } else {
+                    \Log::info('Getting unpicked clients...');
+                    $unpickedClients = $week ? $this->getWeekUnpickedClients() : $this->getTodaysUnpickedClients();
                 
                 if (!$status) {
                     // Get picked from pickup table for today or week
@@ -230,22 +261,29 @@ class PickupController extends Controller
                     
                     $pickedToday = $pickedQuery->get();
                     
-                    return response()->json([
+                    $response = [
                         'status' => true,
                         'data' => [
                             'picked' => $pickedToday,
                             'unpicked' => $unpickedClients,
                             'date' => $today
                         ]
-                    ], 200);
-                } else {
-                    return response()->json([
-                        'status' => true,
-                        'data' => [
-                            'pickups' => $unpickedClients,
-                            'date' => $today
-                        ]
-                    ], 200);
+                    ];
+                    
+                    \Log::info('📦 Get pickups response (picked/unpicked):', $response);
+                    return response()->json($response, 200);
+                    } else {
+                        $response = [
+                            'status' => true,
+                            'data' => [
+                                'pickups' => $unpickedClients,
+                                'date' => $today
+                            ]
+                        ];
+                        
+                        \Log::info('📦 Get pickups response (unpicked only):', $response);
+                        return response()->json($response, 200);
+                    }
                 }
             }
 
@@ -261,6 +299,34 @@ class PickupController extends Controller
             if ($status) {
                 $query->where('pickup_status', $status);
             }
+            
+            // Filter by driver
+            if ($request->has('driver_id')) {
+                if ($request->driver_id === 'unassigned') {
+                    $query->whereNull('driver_id');
+                } elseif (!empty($request->driver_id)) {
+                    $query->where('driver_id', $request->driver_id);
+                }
+            }
+            
+            // Filter by route
+            if ($request->has('route_id') && !empty($request->route_id)) {
+                $query->where('route_id', $request->route_id);
+            }
+            
+            // Filter by pickup day (check day of week from pickup_date)
+            if ($request->has('pickup_day') && !empty($request->pickup_day)) {
+                $dayName = ucfirst(strtolower($request->pickup_day));
+                \Log::info('Filtering by pickup day:', ['requested' => $request->pickup_day, 'dayName' => $dayName]);
+                $query->whereRaw('DAYNAME(pickup_date) = ?', [$dayName]);
+            }
+            
+            \Log::info('Applied filters:', [
+                'driver_id' => $request->driver_id,
+                'route_id' => $request->route_id,
+                'pickup_day' => $request->pickup_day,
+                'status' => $status
+            ]);
 
             $pickups = $query->orderBy('pickup_date', 'desc')->get();
 
@@ -728,6 +794,130 @@ class PickupController extends Controller
             return response()->json([
                 'status' => false,
                 'error' => 'Failed to get active routes',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function getTodayPickupsSummary(Request $request)
+    {
+        $organizationId = $request->user()->id;
+        $today = \Carbon\Carbon::now()->toDateString();
+        
+        // Get today's pickups with route information
+        $pickups = \App\Models\Pickup::with(['client', 'route'])
+            ->whereDate('pickup_date', $today)
+            ->whereHas('client', function($q) use ($organizationId) {
+                $q->where('organization_id', $organizationId);
+            })
+            ->get();
+            
+        $total = $pickups->count();
+        $completed = $pickups->where('pickup_status', 'picked')->count();
+        $pending = $total - $completed;
+        
+        // Group by routes
+        $routesSummary = [];
+        $pickupsByRoute = $pickups->groupBy('route_id');
+        
+        foreach ($pickupsByRoute as $routeId => $routePickups) {
+            $route = $routePickups->first()->route;
+            $routesSummary[] = [
+                'route_id' => $routeId,
+                'route_name' => $route ? $route->name : 'Unknown Route',
+                'total' => $routePickups->count(),
+                'completed' => $routePickups->where('pickup_status', 'picked')->count(),
+                'pending' => $routePickups->where('pickup_status', '!=', 'picked')->count()
+            ];
+        }
+        
+        return response()->json([
+            'status' => true,
+            'data' => [
+                'total' => $total,
+                'completed' => $completed,
+                'pending' => $pending,
+                'routes' => $routesSummary
+            ]
+        ], 200);
+    }
+
+    public function createPickup(Request $request)
+    {
+        \Log::info('=== CREATE PICKUP START ===');
+        \Log::info('Request data:', $request->all());
+        
+        $organizationId = $request->user()->id;
+        
+        $validator = Validator::make($request->all(), [
+            'client_id' => 'required|exists:users,id',
+            'driver_id' => 'nullable|exists:users,id',
+            'pickup_date' => 'required|date',
+            'status' => 'required|in:scheduled,picked'
+        ]);
+        
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 401);
+        }
+        
+        try {
+            // Get client details to find route
+            $client = \App\Models\User::where('id', $request->client_id)
+                ->where('role', 'client')
+                ->first();
+                
+            if (!$client) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Client not found',
+                    'message' => 'Client not found or invalid'
+                ], 404);
+            }
+            
+            $clientRecord = \App\Models\Client::where('user_id', $client->id)->first();
+            
+            $pickupData = [
+                'client_id' => $request->client_id,
+                'route_id' => $clientRecord->route_id ?? null,
+                'pickup_status' => $request->status,
+                'pickup_date' => $request->pickup_date
+            ];
+            
+            if ($request->driver_id) {
+                $pickupData['driver_id'] = $request->driver_id;
+            }
+            
+            if ($request->status === 'picked') {
+                $pickupData['picked_at'] = now();
+            }
+            
+            $pickup = \App\Models\Pickup::create($pickupData);
+            
+            $response = [
+                'status' => true,
+                'message' => 'Pickup created successfully',
+                'data' => ['pickup' => $pickup->load(['client', 'route', 'driver'])]
+            ];
+            
+            \Log::info('📦 Create pickup response:', $response);
+            return response()->json($response, 200);
+            
+        } catch (\Exception $e) {
+            \Log::error('Create pickup failed:', [
+                'error' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+            
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to create pickup',
                 'message' => $e->getMessage()
             ], 500);
         }
