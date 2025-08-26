@@ -10,7 +10,19 @@ class RouteController extends Controller
 {
     public function index(Request $request)
     {
-        $organizationId = $request->user()->id;
+        $user = $request->user();
+        
+        if ($user->role === 'organization') {
+            $organizationId = $user->id;
+        } elseif ($user->role === 'driver') {
+            $organizationId = $user->organization_id;
+        } else {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'Access denied'
+            ], 403);
+        }
         $page = $request->get('page', 1);
         $limit = $request->get('limit', 20);
         $search = $request->get('search', '');
@@ -30,8 +42,9 @@ class RouteController extends Controller
         $totalRoutes = $query->count();
         $totalPages = ceil($totalRoutes / $limit);
         
-        // Apply pagination and ordering
-        $routes = $query->orderBy('created_at', 'desc')
+        // Apply pagination and ordering, include isActive field
+        $routes = $query->select('*')
+                       ->orderBy('created_at', 'desc')
                        ->skip(($page - 1) * $limit)
                        ->take($limit)
                        ->get();
@@ -108,8 +121,23 @@ class RouteController extends Controller
 
     public function show(Request $request, $id)
     {
-        $organizationId = $request->user()->id;
-        $route = Route::where('organization_id', $organizationId)->find($id);
+        $user = $request->user();
+        
+        // Allow both organization and driver access
+        if ($user->role === 'organization') {
+            $route = Route::where('organization_id', $user->id)->find($id);
+        } elseif ($user->role === 'driver') {
+            // Driver can access routes they are assigned to
+            $route = Route::whereHas('driverRoutes', function($q) use ($user) {
+                $q->where('driver_id', $user->id)->where('is_active', true);
+            })->find($id);
+        } else {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'Access denied'
+            ], 403);
+        }
 
         if (!$route) {
             return response()->json([

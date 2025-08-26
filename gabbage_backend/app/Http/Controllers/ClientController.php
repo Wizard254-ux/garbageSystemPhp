@@ -355,6 +355,43 @@ class ClientController extends Controller
         ], 200);
     }
 
+    public function toggleStatus(Request $request, $id)
+    {
+        $organizationId = $request->user()->id;
+        $client = Client::where('user_id', $id)
+            ->where('organization_id', $organizationId)
+            ->with('user')
+            ->first();
+
+        if (!$client) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Client not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'isActive' => 'required|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data'
+            ], 401);
+        }
+
+        $client->user->update(['isActive' => $request->isActive]);
+
+        return response()->json([
+            'status' => true,
+            'message' => $request->isActive ? 'Client activated successfully' : 'Client deactivated successfully',
+            'data' => ['client' => $client->fresh(['user'])]
+        ], 200);
+    }
+
     public function search(Request $request)
     {
         \Log::info('=== CLIENT SEARCH START ===');

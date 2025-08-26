@@ -641,63 +641,58 @@ class PickupController extends Controller
             $driverId = $request->user()->id;
             $routeId = $request->route_id;
 
-            // Check if already active on this route
-            $existingActivation = \App\Models\DriverRoute::where('driver_id', $driverId)
-                ->where('route_id', $routeId)
-                ->where('is_active', true)
-                ->first();
+            // Check if driver has existing record
+            $existingRecord = \App\Models\DriverRoute::where('driver_id', $driverId)->first();
 
-            if ($existingActivation) {
-                return response()->json([
-                    'status' => false,
-                    'error' => 'Already active',
-                    'message' => 'Driver is already active on this route'
-                ], 400);
-            }
+            if ($existingRecord) {
+                // Check if already active on this route
+                if ($existingRecord->route_id == $routeId && $existingRecord->is_active) {
+                    return response()->json([
+                        'status' => false,
+                        'error' => 'Already active',
+                        'message' => 'Driver is already active on this route'
+                    ], 400);
+                }
 
-            // Deactivate driver from all other routes first (one route per driver)
-            $deactivatedRoutes = \App\Models\DriverRoute::where('driver_id', $driverId)
-                ->where('is_active', true)
-                ->get();
-
-            foreach ($deactivatedRoutes as $activeRoute) {
-                $activeRoute->update([
-                    'is_active' => false,
-                    'deactivated_at' => now()
+                // Update existing record to new route
+                $existingRecord->update([
+                    'route_id' => $routeId,
+                    'is_active' => true,
+                    'activated_at' => now()
                 ]);
-                \Log::info('Deactivated driver from previous route:', [
+
+                \Log::info('Updated driver route record:', [
                     'driver_id' => $driverId,
-                    'previous_route_id' => $activeRoute->route_id
+                    'new_route_id' => $routeId,
+                    'record_id' => $existingRecord->id
                 ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Successfully activated on route',
+                    'data' => ['activation' => $existingRecord->fresh()->load('route')]
+                ], 200);
+            } else {
+                // Create new record
+                $activation = \App\Models\DriverRoute::create([
+                    'driver_id' => $driverId,
+                    'route_id' => $routeId,
+                    'is_active' => true,
+                    'activated_at' => now()
+                ]);
+
+                \Log::info('Created new driver route record:', [
+                    'driver_id' => $driverId,
+                    'route_id' => $routeId,
+                    'activation_id' => $activation->id
+                ]);
+
+                return response()->json([
+                    'status' => true,
+                    'message' => 'Successfully activated on route',
+                    'data' => ['activation' => $activation->load('route')]
+                ], 200);
             }
-
-            // Activate driver on new route
-            $activation = \App\Models\DriverRoute::create([
-                'driver_id' => $driverId,
-                'route_id' => $routeId,
-                'is_active' => true,
-                'activated_at' => now()
-            ]);
-
-            \Log::info('Driver activated on route:', [
-                'driver_id' => $driverId,
-                'route_id' => $routeId,
-                'activation_id' => $activation->id,
-                'deactivated_previous_routes' => $deactivatedRoutes->count()
-            ]);
-
-            $message = $deactivatedRoutes->count() > 0 
-                ? 'Successfully switched to new route (deactivated from ' . $deactivatedRoutes->count() . ' previous route(s))'
-                : 'Successfully activated on route';
-
-            return response()->json([
-                'status' => true,
-                'message' => $message,
-                'data' => [
-                    'activation' => $activation->load('route'),
-                    'deactivated_routes' => $deactivatedRoutes->count()
-                ]
-            ], 200);
 
         } catch (\Exception $e) {
             \Log::error('Route activation failed:', [
@@ -718,43 +713,29 @@ class PickupController extends Controller
     {
         \Log::info('=== DRIVER ROUTE DEACTIVATION START ===');
         
-        $validator = Validator::make($request->all(), [
-            'route_id' => 'required|exists:routes,id'
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'status' => false,
-                'error' => 'Validation failed',
-                'message' => 'Invalid route ID'
-            ], 401);
-        }
-
         try {
             $driverId = $request->user()->id;
-            $routeId = $request->route_id;
 
-            $activation = \App\Models\DriverRoute::where('driver_id', $driverId)
-                ->where('route_id', $routeId)
+            $driverRecord = \App\Models\DriverRoute::where('driver_id', $driverId)
                 ->where('is_active', true)
                 ->first();
 
-            if (!$activation) {
+            if (!$driverRecord) {
                 return response()->json([
                     'status' => false,
                     'error' => 'Not active',
-                    'message' => 'Driver is not active on this route'
+                    'message' => 'Driver is not active on any route'
                 ], 400);
             }
 
-            $activation->update([
+            $driverRecord->update([
                 'is_active' => false,
                 'deactivated_at' => now()
             ]);
 
             \Log::info('Driver deactivated from route:', [
                 'driver_id' => $driverId,
-                'route_id' => $routeId
+                'route_id' => $driverRecord->route_id
             ]);
 
             return response()->json([

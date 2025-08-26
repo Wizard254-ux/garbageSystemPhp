@@ -261,9 +261,19 @@ class BagController extends Controller
             ], 404);
         }
 
-        $allocation = DriverBagsAllocation::where('driver_id', $request->driver_id)->first();
+        $allocation = DriverBagsAllocation::where('driver_id', $request->driver_id)
+            ->where('status', 1)
+            ->first();
 
-        if (!$allocation || $allocation->available_bags < $request->number_of_bags) {
+        if (!$allocation) {
+            return response()->json([
+                'status' => false,
+                'error' => 'No active allocation',
+                'message' => 'Driver has no active bag allocation'
+            ], 400);
+        }
+
+        if ($allocation->available_bags < $request->number_of_bags) {
             return response()->json([
                 'status' => false,
                 'error' => 'Insufficient bags',

@@ -28,6 +28,16 @@ class AuthController extends Controller
             if(Auth::attempt($credentials)){
                 $user=Auth::user();
                 
+                // Check if user is active (for organization and driver roles)
+                if(($user->role === 'organization' || $user->role === 'driver') && !$user->isActive) {
+                    Auth::logout();
+                    return response()->json([
+                        'status'=>false,
+                        'error'=>'Account deactivated',
+                        'message'=>'Your account has been deactivated. Please contact support.'
+                    ],401);
+                }
+                
                 // Create token with proper expiration
                 if($request->remember) {
                     $token = $user->createToken('authToken', ['*'], now()->addDays(30));
@@ -528,8 +538,10 @@ class AuthController extends Controller
                 'activated_at' => $activeRoute->activated_at
             ] : null;
             
-            // Add bag allocation
-            $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $driver->id)->first();
+            // Add bag allocation (only active status = 1)
+            $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $driver->id)
+                ->where('status', 1)
+                ->first();
             $driver->allocated_bags = $bagAllocation ? $bagAllocation->available_bags : 0;
         });
         
@@ -651,8 +663,10 @@ class AuthController extends Controller
             ], 404);
         }
 
-        // Get driver bag allocation
-        $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        // Get driver bag allocation (only active status = 1)
+        $bagAllocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)
+            ->where('status', 1)
+            ->first();
         
         $driverData = $driver->toArray();
         $driverData['allocated_bags'] = $bagAllocation ? $bagAllocation->available_bags : 0;
@@ -763,8 +777,10 @@ class AuthController extends Controller
             ], 404);
         }
 
-        // Check if driver has allocated bags
-        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)->first();
+        // Check if driver has allocated bags (only active status = 1)
+        $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $id)
+            ->where('status', 1)
+            ->first();
         if ($allocation && $allocation->available_bags > 0) {
             return response()->json([
                 'status' => false,
@@ -774,12 +790,11 @@ class AuthController extends Controller
             ], 400);
         }
 
-        $driver->delete();
+        // Delete related records first to avoid foreign key constraints
+        \App\Models\ActivityLog::where('user_id', $id)->delete();
+        \App\Models\DriverBagsAllocation::where('driver_id', $id)->delete();
         
-        // Clean up allocation record if exists
-        if ($allocation) {
-            $allocation->delete();
-        }
+        $driver->delete();
 
         return response()->json([
             'status' => true,
@@ -837,6 +852,43 @@ class AuthController extends Controller
         return response()->json([
             'status' => true,
             'message' => 'Driver credentials sent successfully'
+        ], 200);
+    }
+
+    public function toggleDriverStatus(Request $request, $id)
+    {
+        $organizationId = $request->user()->id;
+        $driver = User::where('id', $id)
+            ->where('role', 'driver')
+            ->where('organization_id', $organizationId)
+            ->first();
+
+        if (!$driver) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Driver not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'isActive' => 'required|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data'
+            ], 401);
+        }
+
+        $driver->update(['isActive' => $request->isActive]);
+
+        return response()->json([
+            'status' => true,
+            'message' => $request->isActive ? 'Driver activated successfully' : 'Driver deactivated successfully',
+            'data' => ['driver' => $driver->fresh()]
         ], 200);
     }
 

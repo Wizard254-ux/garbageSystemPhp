@@ -100,7 +100,7 @@ Route::prefix('auth')->group(function () {
 });
 
 // Organization routes (for logged-in organizations)
-Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])->group(function () {
+Route::prefix('organization')->middleware(['auth:sanctum'])->group(function () {
     // Dashboard
     Route::get('/dashboard/counts', [AuthController::class, 'getDashboardCounts']);
     
@@ -113,6 +113,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::post('/{id}/update', [AuthController::class, 'updateDriver'])->middleware('file.uploads');
         Route::delete('/{id}', [AuthController::class, 'deleteDriver']);
         Route::post('/{id}/send-credentials', [AuthController::class, 'sendDriverCredentials']);
+        Route::post('/{id}/toggle-status', [AuthController::class, 'toggleDriverStatus']);
         Route::delete('/{id}/documents', [AuthController::class, 'deleteDriverDocument']);
     });
     
@@ -124,6 +125,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::get('/{id}', [ClientController::class, 'show']);
         Route::put('/{id}', [ClientController::class, 'update'])->middleware('file.uploads');
         Route::post('/{id}', [ClientController::class, 'update'])->middleware('file.uploads'); // For method spoofing
+        Route::post('/{id}/toggle-status', [ClientController::class, 'toggleStatus']);
         Route::delete('/{id}', [ClientController::class, 'destroy']);
         Route::delete('/{id}/documents', [ClientController::class, 'deleteDocument']);
         Route::get('/{id}/payments', [PaymentController::class, 'getClientPayments']);
@@ -133,10 +135,10 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     });
     
     // Routes management
-    Route::prefix('routes')->group(function () {
-        Route::get('/', [RouteController::class, 'index']);
+    Route::prefix('routes')->middleware('organization.only')->group(function () {
+        Route::get('/', [RouteController::class, 'index'])->withoutMiddleware('organization.only');
         Route::post('/', [RouteController::class, 'store']);
-        Route::get('/{id}', [RouteController::class, 'show']);
+        Route::get('/{id}', [RouteController::class, 'show'])->withoutMiddleware('organization.only');
         Route::put('/{id}', [RouteController::class, 'update']);
         Route::delete('/{id}', [RouteController::class, 'destroy']);
     });
