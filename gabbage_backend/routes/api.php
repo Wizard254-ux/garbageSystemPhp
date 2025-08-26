@@ -7,6 +7,7 @@ use App\Http\Controllers\RouteController;
 use App\Http\Controllers\ClientController;
 use App\Http\Controllers\BagController;
 use App\Http\Controllers\BagIssueController;
+use App\Http\Controllers\BagTransferController;
 
 
 
@@ -15,19 +16,58 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
     $user = $request->user();
     $fileUrl = url('/api/storage/documents/' . $filename);
     
-    // Check if user owns this file (check both URL formats)
-    $oldUrl = url('/storage/documents/' . $filename);
-    $userDocuments = $user->documents ?? [];
-    
-    if (!in_array($fileUrl, $userDocuments) && !in_array($oldUrl, $userDocuments)) {
-        abort(403, 'Unauthorized access to file');
+    // For admin users, allow access to all files
+    if ($user->role === 'admin') {
+        // Admin can access any file
+    } else {
+        // Check if user owns this file (check both URL formats and object format)
+        $oldUrl = url('/storage/documents/' . $filename);
+        $userDocuments = $user->documents ?? [];
+        $hasAccess = false;
+        
+        foreach ($userDocuments as $doc) {
+            if (is_string($doc) && ($doc === $fileUrl || $doc === $oldUrl)) {
+                $hasAccess = true;
+                break;
+            } elseif (is_array($doc) && isset($doc['url']) && $doc['url'] === $fileUrl) {
+                $hasAccess = true;
+                break;
+            }
+        }
+        
+        if (!$hasAccess) {
+            abort(403, 'Unauthorized access to file');
+        }
     }
     
     $path = storage_path('app/public/documents/' . $filename);
     if (!file_exists($path)) {
         abort(404);
     }
-    return response()->file($path);
+    
+    $mimeType = mime_content_type($path);
+    return response()->file($path, [
+        'Content-Type' => $mimeType,
+        'Content-Disposition' => 'attachment; filename="' . $filename . '"'
+    ]);
+})->middleware('auth:sanctum');
+
+// Document upload route
+Route::post('/upload-documents', function (Request $request) {
+    $uploadedFiles = [];
+    
+    if ($request->hasFile('documents')) {
+        foreach ($request->file('documents') as $file) {
+            $filename = time() . '_' . $file->getClientOriginalName();
+            $file->storeAs('public/documents', $filename);
+            $uploadedFiles[] = url('/api/storage/documents/' . $filename);
+        }
+    }
+    
+    return response()->json([
+        'status' => true,
+        'data' => ['uploaded_documents' => $uploadedFiles]
+    ]);
 })->middleware('auth:sanctum');
 
 // Auth routes
@@ -111,6 +151,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
         Route::post('/add', [BagController::class, 'addBags']);
         Route::post('/remove', [BagController::class, 'removeBags']);
         Route::post('/allocate', [BagController::class, 'allocateToDriver']);
+        Route::post('/process-return', [BagController::class, 'processBagReturn']);
         
         // Bag issuing with OTP
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
@@ -119,13 +160,18 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
     });
 });
 
-// Driver routes (for bag issuing)
+// Driver routes
 Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
     Route::prefix('bags')->group(function () {
         Route::get('/', [BagController::class, 'getDriverBags']);
-        Route::post('/return', [BagController::class, 'returnBags']);
+        Route::get('/stats', [BagController::class, 'getDriverBagStats']);
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
         Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
+        
+        // Bag transfers
+        Route::post('/transfer/initiate', [BagTransferController::class, 'initiateBagTransfer']);
+        Route::post('/transfer/complete', [BagTransferController::class, 'completeBagTransfer']);
+        Route::get('/transfer/history', [BagTransferController::class, 'getTransferHistory']);
     });
 });
 

@@ -10,11 +10,21 @@ class AdminOnly
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if ($request->user()->role !== 'admin') {
+        $user = $request->user();
+        
+        if (!$user) {
             return response()->json([
                 'status' => false,
-                'error' => 'Unauthorized',
-                'message' => 'Access token is required'
+                'error' => 'Unauthenticated',
+                'message' => 'No authenticated user found. Please login again.'
+            ], 401);
+        }
+        
+        if ($user->role !== 'admin') {
+            return response()->json([
+                'status' => false,
+                'error' => 'Forbidden',
+                'message' => 'Admin access required. Current role: ' . $user->role
             ], 403);
         }
         

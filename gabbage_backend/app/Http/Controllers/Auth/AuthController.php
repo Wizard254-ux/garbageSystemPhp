@@ -27,15 +27,13 @@ class AuthController extends Controller
             $credentials=$request->only('email','password');
             if(Auth::attempt($credentials)){
                 $user=Auth::user();
-                $token = $user->createToken('authToken');
                 
-                // Set expiration based on remember me
+                // Create token with proper expiration
                 if($request->remember) {
-                    $token->accessToken->expires_at = now()->addDays(30);
+                    $token = $user->createToken('authToken', ['*'], now()->addDays(30));
                 } else {
-                    $token->accessToken->expires_at = now()->addHours(2);
+                    $token = $user->createToken('authToken', ['*'], now()->addHours(24));
                 }
-                $token->accessToken->save();
                 
                 $tokenResult = $token->plainTextToken;
                 return response()->json([
@@ -85,7 +83,7 @@ class AuthController extends Controller
             'password'=>'required|string|min:6|max:20',
             'role'=>'required|in:client,driver',
             'phone'=>'nullable|string|max:20',
-            'adress'=>'nullable|string|max:255',
+            'address'=>'nullable|string|max:255',
             'uploaded_documents'=>'nullable|array',
         ]);
 
@@ -96,7 +94,7 @@ class AuthController extends Controller
                 'password'=>Hash::make($request->password),
                 'role'=>$request->role,
                 'phone'=>$request->phone,
-                'adress'=>$request->adress,
+                'address'=>$request->address,
                 'documents'=>$request->uploaded_documents ?? []
             ]);
             $tokenResult=$user->createToken('authToken')->plainTextToken;
@@ -152,16 +150,21 @@ class AuthController extends Controller
 
     public function CreateOrganization(Request $request)
     {
+
+        
         $validator=Validator($request->all(),[
             'name'=>'required|string|max:255',
             'email'=>'required|email|unique:users,email',
             'phone'=>'nullable|string|max:20',
-            'adress'=>'nullable|string|max:255',
+            'address'=>'nullable|string|max:255',
             'uploaded_documents'=>'nullable|array',
         ]);
 
         if(!$validator->fails()){
             $randomPassword = Str::random(12);
+            
+            // Get processed documents from middleware
+            $processedDocuments = $request->attributes->get('processed_documents', []);
             
             $user=User::create([
                 'name'=>$request->name,
@@ -169,32 +172,25 @@ class AuthController extends Controller
                 'password'=>Hash::make($randomPassword),
                 'role'=>'organization',
                 'phone'=>$request->phone,
-                'adress'=>$request->adress,
-                'documents'=>$request->uploaded_documents ?? []
+                'address'=>$request->address,
+                'documents'=>$processedDocuments,
+                'isSent'=>false
             ]);
             
-            // Send credentials via email
-            Mail::to($user->email)->send(new OrganizationCredentials(
-                $user->email,
-                $randomPassword,
-                $user->name
-            ));
-            
-            // Mark as sent
-            $user->isSent = true;
-            $user->save();
+
             
             return response()->json([
                 'status'=>true,
-                'message'=>'Organization Created Successfully. Credentials sent to email.',
+                'message'=>'Organization Created Successfully.',
                 'data'=>['user'=>$user]
             ],200);
         }else{
+            \Log::error('CreateOrganization validation failed', $validator->errors()->toArray());
             return response()->json([
                 'status'=>false,
                 'message'=>'Validation Error',
                 'errors'=>$validator->errors()
-            ],401);
+            ],422);
         }
     }
 
@@ -247,7 +243,7 @@ class AuthController extends Controller
     {
         $validator=Validator($request->all(),[
             'action'=>'required|in:edit,delete,list',
-            'organizationId'=>'required_unless:action,list|exists:users,id',
+            'organizationId'=>'nullable|exists:users,id',
             'updateData'=>'required_if:action,edit|array',
             'page'=>'nullable|integer|min:1',
             'limit'=>'nullable|integer|min:1|max:100',
@@ -255,6 +251,15 @@ class AuthController extends Controller
             'sortBy'=>'nullable|in:name,email,created_at,updated_at',
             'sortOrder'=>'nullable|in:asc,desc',
         ]);
+
+        // Additional validation for organizationId when action is not 'list'
+        if ($request->action !== 'list' && !$request->organizationId) {
+            return response()->json([
+                'status'=>false,
+                'message'=>'Organization ID is required for this action',
+                'errors'=>['organizationId' => ['Organization ID is required']]
+            ],401);
+        }
 
         if(!$validator->fails()){
             if($request->action === 'list') {
@@ -277,7 +282,7 @@ class AuthController extends Controller
                 $organizations = $query->orderBy($sortBy, $sortOrder)
                                       ->skip(($page - 1) * $limit)
                                       ->take($limit)
-                                      ->select('id', 'name', 'email', 'phone', 'created_at', 'updated_at')
+                                      ->select('id', 'name', 'email', 'phone', 'address', 'isActive', 'isSent', 'documents', 'created_at', 'updated_at')
                                       ->get();
                 
                 return response()->json([
@@ -313,7 +318,7 @@ class AuthController extends Controller
                     }
                 }
                 
-                $user->update(array_intersect_key($updateData, array_flip(['name', 'email', 'phone', 'adress'])));
+                $user->update(array_intersect_key($updateData, array_flip(['name', 'email', 'phone', 'address'])));
                 
                 return response()->json([
                     'status'=>true,
@@ -374,7 +379,7 @@ class AuthController extends Controller
                     'name'=>$user->name,
                     'email'=>$user->email,
                     'phone'=>$user->phone,
-                    'adress'=>$user->adress,
+                    'address'=>$user->address,
                     'role'=>$user->role,
                     'isActive'=>true,
                     'isSent'=>true,
@@ -790,7 +795,7 @@ class AuthController extends Controller
         $organizations = $query->orderBy($sortBy, $sortOrder)
                               ->skip(($page - 1) * $limit)
                               ->take($limit)
-                              ->select('id', 'name', 'email', 'phone', 'adress', 'isActive', 'isSent', 'created_at', 'updated_at')
+                              ->select('id', 'name', 'email', 'phone', 'address', 'isActive', 'isSent', 'created_at', 'updated_at')
                               ->get();
         
         // Transform data to match frontend expectations
@@ -800,7 +805,7 @@ class AuthController extends Controller
                 'name' => $org->name,
                 'email' => $org->email,
                 'phone' => $org->phone,
-                'adress' => $org->adress,
+                'address' => $org->address,
                 'isActive' => (bool)$org->isActive,
                 'isSent' => (bool)$org->isSent,
                 'createdAt' => $org->created_at->toISOString(),
