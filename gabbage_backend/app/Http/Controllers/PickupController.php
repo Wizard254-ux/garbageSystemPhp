@@ -714,14 +714,20 @@ class PickupController extends Controller
         try {
             $driverId = $request->user()->id;
 
-            $activeRoutes = \App\Models\DriverRoute::with('route')
+            $activeRoute = \App\Models\DriverRoute::with('route')
                 ->where('driver_id', $driverId)
                 ->where('is_active', true)
-                ->get();
+                ->first();
 
             return response()->json([
                 'status' => true,
-                'data' => ['active_routes' => $activeRoutes]
+                'data' => [
+                    'route' => $activeRoute ? [
+                        'id' => $activeRoute->route->id,
+                        'name' => $activeRoute->route->name,
+                        'path' => $activeRoute->route->path ?? null
+                    ] : null
+                ]
             ], 200);
 
         } catch (\Exception $e) {

@@ -171,7 +171,7 @@ Route::prefix('organization')->middleware(['auth:sanctum', 'organization.only'])
 
 // Driver routes
 Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(function () {
-    Route::get('/dashboard', [AuthController::class, 'getDriverDashboard']);
+    Route::get('/dashboard/stats', [AuthController::class, 'getDriverDashboardStats']);
     Route::get('/stats', [AuthController::class, 'getDriverStats']);
     Route::get('/drivers', [AuthController::class, 'getOrganizationDrivers']);
     
@@ -196,7 +196,8 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
     });
     
     Route::prefix('routes')->group(function () {
-        Route::post('/', [RouteController::class, 'manageDriverRoutes']);
+        Route::get('/', [RouteController::class, 'getDriverRoutes']);
+        Route::get('/{id}', [RouteController::class, 'getDriverRouteDetails']);
         Route::post('/activate', [\App\Http\Controllers\PickupController::class, 'activateRoute']);
         Route::post('/deactivate', [\App\Http\Controllers\PickupController::class, 'deactivateRoute']);
         Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);

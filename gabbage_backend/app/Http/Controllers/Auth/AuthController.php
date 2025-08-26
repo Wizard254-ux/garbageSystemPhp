@@ -960,5 +960,44 @@ class AuthController extends Controller
             'data' => $drivers
         ], 200);
     }
+
+    public function getDriverDashboardStats(Request $request)
+    {
+        try {
+            $driverId = $request->user()->id;
+
+            // Get active route
+            $activeRoute = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driverId)
+                ->where('is_active', true)
+                ->first();
+
+            // Get bag stats
+            $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $driverId)->first();
+
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'active_route' => $activeRoute ? [
+                        'id' => $activeRoute->route->id,
+                        'name' => $activeRoute->route->name,
+                        'path' => $activeRoute->route->path ?? null
+                    ] : null,
+                    'bag_stats' => [
+                        'allocated_bags' => $allocation ? $allocation->allocated_bags : 0,
+                        'used_bags' => $allocation ? $allocation->used_bags : 0,
+                        'available_bags' => $allocation ? $allocation->available_bags : 0
+                    ]
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get dashboard stats',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
 }
 
