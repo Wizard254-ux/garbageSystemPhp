@@ -1,0 +1,98 @@
+{
+	"info": {
+		"name": "Driver Weekly Pickup Endpoints",
+		"description": "Driver endpoints for getting weekly pickup data"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000/api"
+		},
+		{
+			"key": "auth_token",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "Get This Week's Pickups - All",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/driver/pickups?week=current",
+					"host": ["{{base_url}}"],
+					"path": ["driver", "pickups"],
+					"query": [
+						{
+							"key": "week",
+							"value": "current"
+						}
+					]
+				},
+				"description": "Get all pickups (picked and unpicked) for current week"
+			}
+		},
+		{
+			"name": "Get This Week's Picked Clients",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/driver/pickups?week=current&status=picked",
+					"host": ["{{base_url}}"],
+					"path": ["driver", "pickups"],
+					"query": [
+						{
+							"key": "week",
+							"value": "current"
+						},
+						{
+							"key": "status",
+							"value": "picked"
+						}
+					]
+				},
+				"description": "Get only picked clients for current week"
+			}
+		},
+		{
+			"name": "Get This Week's Unpicked Clients",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Authorization",
+						"value": "Bearer {{auth_token}}"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/driver/pickups?week=current&status=unpicked",
+					"host": ["{{base_url}}"],
+					"path": ["driver", "pickups"],
+					"query": [
+						{
+							"key": "week",
+							"value": "current"
+						},
+						{
+							"key": "status",
+							"value": "unpicked"
+						}
+					]
+				},
+				"description": "Get only unpicked clients for current week"
+			}
+		}
+	]
+}

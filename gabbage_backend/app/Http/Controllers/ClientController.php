@@ -81,10 +81,7 @@ class ClientController extends Controller
             'documents' => $request->uploaded_documents ?? []
         ]);
 
-        // Generate account number
-        $accountNumber = 'ACC' . str_pad($user->id, 6, '0', STR_PAD_LEFT);
-
-        // Create client record
+        // Create client record (accountNumber auto-generated)
         $client = Client::create([
             'user_id' => $user->id,
             'organization_id' => $request->user()->id,
@@ -94,8 +91,7 @@ class ClientController extends Controller
             'numberOfUnits' => $request->numberOfUnits,
             'pickUpDay' => $request->pickUpDay,
             'gracePeriod' => $request->gracePeriod,
-            'serviceStartDate' => $request->serviceStartDate,
-            'accountNumber' => $accountNumber
+            'serviceStartDate' => $request->serviceStartDate
         ]);
 
         return response()->json([

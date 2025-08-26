@@ -512,9 +512,17 @@ class AuthController extends Controller
             
             \Log::info('User created successfully:', ['id' => $user->id]);
             
+            // Send credentials via email
+            try {
+                Mail::to($user->email)->send(new \App\Mail\DriverCredentials($user->email, 'password123', $user->name));
+                \Log::info('Driver credentials email sent successfully');
+            } catch (\Exception $e) {
+                \Log::error('Failed to send driver credentials email:', ['error' => $e->getMessage()]);
+            }
+            
             return response()->json([
                 'status' => true,
-                'message' => 'Driver created successfully',
+                'message' => 'Driver created successfully. Credentials sent to email.',
                 'data' => ['driver' => $user]
             ], 200);
             
@@ -557,21 +565,9 @@ class AuthController extends Controller
 
     public function updateDriver(Request $request, $id)
     {
-        // Test response to see if method is called
-        return response()->json([
-            'status' => true,
-            'message' => 'Update driver method called successfully',
-            'data' => [
-                'driver_id' => $id,
-                'request_data' => $request->all(),
-                'files' => $request->allFiles()
-            ]
-        ], 200);
-        
         \Log::info('=== UPDATE DRIVER START ===');
         \Log::info('Driver ID:', ['id' => $id]);
         \Log::info('Request data:', $request->all());
-        \Log::info('Request files:', $request->allFiles());
         
         $organizationId = $request->user()->id;
         $driver = User::where('id', $id)
@@ -619,16 +615,34 @@ class AuthController extends Controller
         if ($request->has('isActive')) $updateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
         $updateData['documents'] = $allDocuments;
 
-        $driver->update($updateData);
-
-        \Log::info('Driver updated successfully');
-        \Log::info('=== UPDATE DRIVER END ===');
+        \Log::info('Update data:', $updateData);
         
-        return response()->json([
-            'status' => true,
-            'message' => 'Driver updated successfully',
-            'data' => ['driver' => $driver->fresh()]
-        ], 200);
+        try {
+            $result = $driver->update($updateData);
+            \Log::info('Database update result:', ['success' => $result]);
+            
+            $freshDriver = $driver->fresh();
+            \Log::info('Fresh driver data:', ['driver' => $freshDriver->toArray()]);
+            
+            return response()->json([
+                'status' => true,
+                'message' => 'Driver updated successfully',
+                'data' => ['driver' => $freshDriver]
+            ], 200);
+            
+        } catch (\Exception $e) {
+            \Log::error('Error updating driver:', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+            
+            return response()->json([
+                'status' => false,
+                'error' => 'Update failed',
+                'message' => 'Failed to update driver: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     public function deleteDriver(Request $request, $id)
@@ -673,13 +687,20 @@ class AuthController extends Controller
 
     public function sendDriverCredentials(Request $request, $id)
     {
+        \Log::info('=== SEND DRIVER CREDENTIALS START ===');
+        \Log::info('Driver ID:', ['id' => $id]);
+        \Log::info('Organization ID:', ['org_id' => $request->user()->id]);
+        
         $organizationId = $request->user()->id;
+        
+        \Log::info('Searching for driver...');
         $driver = User::where('id', $id)
             ->where('role', 'driver')
             ->where('organization_id', $organizationId)
             ->first();
 
         if (!$driver) {
+            \Log::error('Driver not found', ['driver_id' => $id, 'org_id' => $organizationId]);
             return response()->json([
                 'status' => false,
                 'error' => 'Not found',
@@ -687,14 +708,25 @@ class AuthController extends Controller
             ], 404);
         }
 
+        \Log::info('Driver found:', ['driver_email' => $driver->email, 'driver_name' => $driver->name]);
+        
         // Generate new password and send credentials
         $newPassword = Str::random(12);
+        \Log::info('Generated new password for driver');
+        
         $driver->password = Hash::make($newPassword);
         $driver->save();
+        \Log::info('Password updated in database');
 
-        // TODO: Send email with credentials
-        // Mail::to($driver->email)->send(new DriverCredentials($driver->email, $newPassword, $driver->name));
+        // Send email with credentials
+        try {
+            Mail::to($driver->email)->send(new \App\Mail\DriverCredentials($driver->email, $newPassword, $driver->name));
+            \Log::info('Email sent successfully to driver');
+        } catch (\Exception $e) {
+            \Log::error('Failed to send email:', ['error' => $e->getMessage()]);
+        }
 
+        \Log::info('=== SEND DRIVER CREDENTIALS END ===');
         return response()->json([
             'status' => true,
             'message' => 'Driver credentials sent successfully'

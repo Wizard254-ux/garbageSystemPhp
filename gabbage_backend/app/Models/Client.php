@@ -4,9 +4,27 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Str;
 
 class Client extends Model
 {
+    protected static function boot()
+    {
+        parent::boot();
+        
+        static::creating(function ($client) {
+            $client->accountNumber = self::generateAccountNumber();
+        });
+    }
+
+    private static function generateAccountNumber()
+    {
+        do {
+            $number = 'ACC' . strtoupper(Str::random(6));
+        } while (self::where('accountNumber', $number)->exists());
+        
+        return $number;
+    }
     protected $fillable = [
         'user_id',
         'organization_id',

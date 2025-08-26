@@ -1,0 +1,599 @@
+{
+	"info": {
+		"_postman_id": "pickup-management-clean",
+		"name": "Pickup Management API - Clean",
+		"description": "Simplified pickup management with essential endpoints only",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{auth_token}}",
+				"type": "string"
+			}
+		]
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000/api",
+			"type": "string"
+		},
+		{
+			"key": "auth_token",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Driver Pickup Operations",
+			"item": [
+				{
+					"name": "Mark Pickup (Driver)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"client_id\": 12\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/driver/pickups/mark",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups", "mark"]
+						},
+						"description": "Driver marks a client as picked up. Sends email notification to client."
+					}
+				},
+				{
+					"name": "Get This Week's Pickups - All (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?week=current",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								}
+							]
+						},
+						"description": "Get all pickups (picked and unpicked) for current week"
+					}
+				},
+				{
+					"name": "Get This Week's Picked Clients (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?week=current&status=picked",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								},
+								{
+									"key": "status",
+									"value": "picked"
+								}
+							]
+						},
+						"description": "Get only picked clients for current week"
+					}
+				},
+				{
+					"name": "Get This Week's Unpicked Clients (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?week=current&status=unpicked",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								},
+								{
+									"key": "status",
+									"value": "unpicked"
+								}
+							]
+						},
+						"description": "Get only unpicked clients for current week"
+					}
+				},
+				{
+					"name": "Get Specific Day Pickups - All (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?date=2025-08-25",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-25"
+								}
+							]
+						},
+						"description": "Get all pickups for specific day in the week"
+					}
+				},
+				{
+					"name": "Get Specific Day Pickups - Picked (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?date=2025-08-25&status=picked",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-25"
+								},
+								{
+									"key": "status",
+									"value": "picked"
+								}
+							]
+						},
+						"description": "Get picked clients for specific day in the week"
+					}
+				},
+				{
+					"name": "Get Specific Day Pickups - Unpicked (Driver)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/driver/pickups?date=2025-08-25&status=unpicked",
+							"host": ["{{base_url}}"],
+							"path": ["driver", "pickups"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-25"
+								},
+								{
+									"key": "status",
+									"value": "unpicked"
+								}
+							]
+						},
+						"description": "Get unpicked clients for specific day in the week"
+					}
+				}
+			]
+		},
+		{
+			"name": "Organization Pickup Management",
+			"item": [
+				{
+					"name": "Get All Pickups - Today (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"]
+						},
+						"description": "Get today's pickups (both picked and unpicked)"
+					}
+				},
+				{
+					"name": "Get Pickups - Specific Date (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?date=2025-08-25",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-25"
+								}
+							]
+						},
+						"description": "Get pickups for specific date"
+					}
+				},
+				{
+					"name": "Get Pickups - Date Range (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?start_date=2025-08-20&end_date=2025-08-25",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2025-08-20"
+								},
+								{
+									"key": "end_date",
+									"value": "2025-08-25"
+								}
+							]
+						},
+						"description": "Get pickups for date range"
+					}
+				},
+				{
+					"name": "Get Only Picked Pickups (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?status=picked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "status",
+									"value": "picked"
+								}
+							]
+						},
+						"description": "Get only completed pickups"
+					}
+				},
+				{
+					"name": "Get Only Unpicked Pickups (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?status=unpicked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "status",
+									"value": "unpicked"
+								}
+							]
+						},
+						"description": "Get only pending pickups"
+					}
+				},
+				{
+					"name": "Get Clients to Pickup - Today (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups/clients",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups", "clients"]
+						},
+						"description": "Get clients scheduled for pickup today"
+					}
+				},
+				{
+					"name": "Get Clients to Pickup - Specific Date (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups/clients?date=2025-08-26",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups", "clients"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-26"
+								}
+							]
+						},
+						"description": "Get clients scheduled for pickup on specific date"
+					}
+				},
+				{
+					"name": "Get Clients to Pickup - Date Range (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups/clients?start_date=2025-08-25&end_date=2025-08-30",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups", "clients"],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2025-08-25"
+								},
+								{
+									"key": "end_date",
+									"value": "2025-08-30"
+								}
+							]
+						},
+						"description": "Get clients scheduled for pickup in date range"
+					}
+				},
+				{
+					"name": "Get This Week's Pickups - All (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?week=current",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								}
+							]
+						},
+						"description": "Get all pickups (picked and unpicked) for current week"
+					}
+				},
+				{
+					"name": "Get This Week's Picked Clients (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?week=current&status=picked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								},
+								{
+									"key": "status",
+									"value": "picked"
+								}
+							]
+						},
+						"description": "Get only picked clients for current week"
+					}
+				},
+				{
+					"name": "Get This Week's Unpicked Clients (Organization)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/pickups?week=current&status=unpicked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								},
+								{
+									"key": "status",
+									"value": "unpicked"
+								}
+							]
+						},
+						"description": "Get only unpicked clients for current week"
+					}
+				}
+			]
+		},
+		{
+			"name": "Client Pickup History",
+			"item": [
+				{
+					"name": "Get Client Pickup History - All",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"]
+						},
+						"description": "Get all pickup history for specific client"
+					}
+				},
+				{
+					"name": "Get Client Pickup History - Specific Date",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups?date=2025-08-25",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"],
+							"query": [
+								{
+									"key": "date",
+									"value": "2025-08-25"
+								}
+							]
+						},
+						"description": "Get client pickup history for specific date"
+					}
+				},
+				{
+					"name": "Get Client Pickup History - Date Range",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups?start_date=2025-08-20&end_date=2025-08-25",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"],
+							"query": [
+								{
+									"key": "start_date",
+									"value": "2025-08-20"
+								},
+								{
+									"key": "end_date",
+									"value": "2025-08-25"
+								}
+							]
+						},
+						"description": "Get client pickup history for date range"
+					}
+				},
+				{
+					"name": "Get Client Pickup History - Only Picked",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups?status=picked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"],
+							"query": [
+								{
+									"key": "status",
+									"value": "picked"
+								}
+							]
+						},
+						"description": "Get only completed pickups for client"
+					}
+				},
+				{
+					"name": "Get Client Pickup History - Only Unpicked",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups?status=unpicked",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"],
+							"query": [
+								{
+									"key": "status",
+									"value": "unpicked"
+								}
+							]
+						},
+						"description": "Get only missed pickups for client"
+					}
+				},
+				{
+					"name": "Get Client Pickup History - This Week",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/organization/clients/12/pickups?week=current",
+							"host": ["{{base_url}}"],
+							"path": ["organization", "clients", "12", "pickups"],
+							"query": [
+								{
+									"key": "week",
+									"value": "current"
+								}
+							]
+						},
+						"description": "Get client pickup history for current week"
+					}
+				}
+			]
+		},
+		{
+			"name": "Authentication (Required)",
+			"item": [
+				{
+					"name": "Login as Driver",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    pm.collectionVariables.set('auth_token', response.data.token);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"driver@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "login"]
+						},
+						"description": "Login as driver to access driver pickup endpoints"
+					}
+				},
+				{
+					"name": "Login as Organization",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const response = pm.response.json();",
+									"    pm.collectionVariables.set('auth_token', response.data.token);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"email\": \"org@example.com\",\n  \"password\": \"password123\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/login",
+							"host": ["{{base_url}}"],
+							"path": ["auth", "login"]
+						},
+						"description": "Login as organization to access organization pickup endpoints"
+					}
+				}
+			]
+		}
+	]
+}
