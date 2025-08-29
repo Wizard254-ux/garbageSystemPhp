@@ -1,4 +1,4 @@
-<?php
+rf<?php
 
 namespace App\Http\Controllers;
 
@@ -12,10 +12,6 @@ class PickupController extends Controller
 {
     public function markPickup(Request $request)
     {
-        \Log::info('=== DRIVER PICKUP START ===');
-        \Log::info('Request data:', $request->all());
-        \Log::info('Driver ID:', ['driver_id' => $request->user()->id]);
-
         $validator = Validator::make($request->all(), [
             'client_id' => 'required|exists:users,id'
         ]);
@@ -38,13 +34,7 @@ class PickupController extends Controller
             $weekStart = $today->copy()->startOfWeek();
             $weekEnd = $today->copy()->endOfWeek();
 
-            \Log::info('Pickup parameters:', [
-                'driver_id' => $driverId,
-                'client_id' => $clientId,
-                'pickup_date' => $today->toDateString(),
-                'week_start' => $weekStart->toDateString(),
-                'week_end' => $weekEnd->toDateString()
-            ]);
+           
 
             // Get client details
             $client = Client::where('user_id', $clientId)->first();
@@ -56,10 +46,7 @@ class PickupController extends Controller
                 ], 404);
             }
 
-            \Log::info('Client found:', [
-                'client_id' => $client->id,
-                'route_id' => $client->route_id
-            ]);
+            
 
             // Check if driver is active on the client's route
             $driverRouteActive = \App\Models\DriverRoute::where('driver_id', $driverId)
@@ -68,10 +55,7 @@ class PickupController extends Controller
                 ->first();
 
             if (!$driverRouteActive) {
-                \Log::warning('Driver not active on client route:', [
-                    'driver_id' => $driverId,
-                    'client_route_id' => $client->route_id
-                ]);
+               
                 return response()->json([
                     'status' => false,
                     'error' => 'Not active on route',
@@ -79,10 +63,7 @@ class PickupController extends Controller
                 ], 403);
             }
 
-            \Log::info('Driver is active on client route:', [
-                'driver_id' => $driverId,
-                'route_id' => $client->route_id
-            ]);
+           
 
             // Check if pickup already exists for this week
             $existingPickup = Pickup::where('client_id', $clientId)
