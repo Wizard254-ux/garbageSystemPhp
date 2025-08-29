@@ -30,6 +30,8 @@ class Invoice extends Model
         'payment_ids' => 'array',
     ];
 
+    protected $appends = ['payment_trans_ids'];
+
     protected static function boot()
     {
         parent::boot();
@@ -56,5 +58,16 @@ class Invoice extends Model
     public function organization(): BelongsTo
     {
         return $this->belongsTo(User::class, 'organization_id');
+    }
+
+    public function getPaymentTransIdsAttribute()
+    {
+        if (empty($this->payment_ids)) {
+            return [];
+        }
+        
+        return \App\Models\Payment::whereIn('id', $this->payment_ids)
+            ->pluck('trans_id')
+            ->toArray();
     }
 }

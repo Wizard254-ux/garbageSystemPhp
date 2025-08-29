@@ -601,14 +601,21 @@ class AuthController extends Controller
 
         \Log::info('Validation passed, creating user...');
         
+        // Get processed documents from middleware
+        $processedDocuments = $request->attributes->get('processed_documents', []);
+        \Log::info('Documents from middleware:', $processedDocuments);
+        \Log::info('Request uploaded_documents:', $request->uploaded_documents ?? []);
+        
         try {
+            $randomPassword = Str::random(6);
+            
             $userData = [
                 'name' => $request->name,
                 'email' => $request->email,
-                'password' => Hash::make('password123'),
+                'password' => Hash::make($randomPassword),
                 'role' => 'driver',
                 'phone' => $request->phone,
-                'documents' => $request->uploaded_documents ?? [],
+                'documents' => $processedDocuments,
                 'organization_id' => $request->user()->id
             ];
             
@@ -617,10 +624,13 @@ class AuthController extends Controller
             $user = User::create($userData);
             
             \Log::info('User created successfully:', ['id' => $user->id]);
+            \Log::info('User documents saved:', $user->documents);
             
             // Send credentials via email
             try {
-                Mail::to($user->email)->send(new \App\Mail\DriverCredentials($user->email, 'password123', $user->name));
+                Mail::to($user->email)->send(new \App\Mail\DriverCredentials($user->email, $randomPassword, $user->name));
+                $user->isSent = true;
+                $user->save();
                 \Log::info('Driver credentials email sent successfully');
             } catch (\Exception $e) {
                 \Log::error('Failed to send driver credentials email:', ['error' => $e->getMessage()]);
@@ -717,10 +727,16 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // Handle document updates
+        // Handle document updates - get processed documents from middleware
         $currentDocuments = $driver->documents ?? [];
-        $newDocuments = $request->uploaded_documents ?? [];
-        $allDocuments = !empty($newDocuments) ? array_merge($currentDocuments, $newDocuments) : $currentDocuments;
+        $processedDocuments = $request->attributes->get('processed_documents', []);
+        $allDocuments = !empty($processedDocuments) ? array_merge($currentDocuments, $processedDocuments) : $currentDocuments;
+        
+        \Log::info('Document processing:', [
+            'current_documents' => $currentDocuments,
+            'processed_documents' => $processedDocuments,
+            'all_documents' => $allDocuments
+        ]);
 
         // Update driver data
         $updateData = [];
@@ -729,7 +745,9 @@ class AuthController extends Controller
         if ($request->has('phone')) $updateData['phone'] = $request->phone;
         if ($request->has('address')) $updateData['address'] = $request->address;
         if ($request->has('isActive')) $updateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
-        $updateData['documents'] = $allDocuments;
+        if (!empty($processedDocuments)) {
+            $updateData['documents'] = $allDocuments;
+        }
 
         \Log::info('Update data:', $updateData);
         
@@ -923,9 +941,14 @@ class AuthController extends Controller
         $documentPath = $request->documentPath;
         $documents = $driver->documents ?? [];
         
-        // Remove the document from the array
+        // Remove the document from the array - handle both string and object formats
         $updatedDocuments = array_filter($documents, function($doc) use ($documentPath) {
-            return $doc !== $documentPath;
+            if (is_string($doc)) {
+                return $doc !== $documentPath;
+            } elseif (is_array($doc) && isset($doc['url'])) {
+                return $doc['url'] !== $documentPath;
+            }
+            return true;
         });
         
         // Update driver documents

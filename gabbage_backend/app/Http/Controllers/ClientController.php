@@ -102,6 +102,12 @@ class ClientController extends Controller
             ], 401);
         }
 
+        // Get processed documents from middleware
+        $processedDocuments = $request->attributes->get('processed_documents', []);
+        \Log::info('=== CLIENT STORE DEBUG ===');
+        \Log::info('Documents from middleware count: ' . count($processedDocuments));
+        \Log::info('Documents from middleware:', $processedDocuments);
+        
         // Create user first
         $user = User::create([
             'name' => $request->name,
@@ -110,7 +116,7 @@ class ClientController extends Controller
             'role' => 'client',
             'phone' => $request->phone,
             'address' => $request->address,
-            'documents' => $request->uploaded_documents ?? []
+            'documents' => $processedDocuments
         ]);
 
         // Create client record (accountNumber auto-generated)
@@ -230,15 +236,18 @@ class ClientController extends Controller
             ], 401);
         }
 
-        // Handle document updates - add new documents to existing ones
+        // Handle document updates - get processed documents from middleware
         $currentDocuments = $client->user->documents ?? [];
-        $newDocuments = $request->uploaded_documents ?? [];
+        $processedDocuments = $request->attributes->get('processed_documents', []);
+        \Log::info('=== CLIENT UPDATE DEBUG ===');
+        \Log::info('Current documents count: ' . count($currentDocuments));
+        \Log::info('New documents from middleware count: ' . count($processedDocuments));
         \Log::info('Current documents:', $currentDocuments);
-        \Log::info('New documents from middleware:', $newDocuments);
+        \Log::info('New documents from middleware:', $processedDocuments);
         
         // Only merge if there are new documents, otherwise keep existing
-        if (!empty($newDocuments)) {
-            $allDocuments = array_merge($currentDocuments, $newDocuments);
+        if (!empty($processedDocuments)) {
+            $allDocuments = array_merge($currentDocuments, $processedDocuments);
         } else {
             $allDocuments = $currentDocuments;
         }
@@ -251,10 +260,13 @@ class ClientController extends Controller
         if ($request->has('phone')) $userUpdateData['phone'] = $request->phone;
         if ($request->has('address')) $userUpdateData['address'] = $request->address;
         if ($request->has('isActive')) $userUpdateData['isActive'] = filter_var($request->isActive, FILTER_VALIDATE_BOOLEAN);
-        $userUpdateData['documents'] = $allDocuments;
+        if (!empty($processedDocuments)) {
+            $userUpdateData['documents'] = $allDocuments;
+        }
         
         \Log::info('User Update Data:', $userUpdateData);
         $client->user->update($userUpdateData);
+        \Log::info('User updated. Final documents in DB: ', $client->user->fresh()->documents ?? []);
         
         // Update client data
         $clientData = [];
@@ -334,9 +346,14 @@ class ClientController extends Controller
         $documentPath = $request->documentPath;
         $documents = $client->user->documents ?? [];
         
-        // Remove the document from the array
+        // Remove the document from the array - handle both string and object formats
         $updatedDocuments = array_filter($documents, function($doc) use ($documentPath) {
-            return $doc !== $documentPath;
+            if (is_string($doc)) {
+                return $doc !== $documentPath;
+            } elseif (is_array($doc) && isset($doc['url'])) {
+                return $doc['url'] !== $documentPath;
+            }
+            return true;
         });
         
         // Update user documents

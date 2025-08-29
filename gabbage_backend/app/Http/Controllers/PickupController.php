@@ -1,4 +1,4 @@
-rf<?php
+<?php
 
 namespace App\Http\Controllers;
 
@@ -207,7 +207,8 @@ class PickupController extends Controller
             'week' => 'nullable|in:current,this',
             'driver_id' => 'nullable|string',
             'route_id' => 'nullable|exists:routes,id',
-            'pickup_day' => 'nullable|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday'
+            'pickup_day' => 'nullable|in:monday,tuesday,wednesday,thursday,friday,saturday,sunday',
+            'client_name' => 'nullable|string'
         ]);
 
         if ($validator->fails()) {
@@ -328,10 +329,20 @@ class PickupController extends Controller
                 $query->whereRaw('DAYNAME(pickup_date) = ?', [$dayName]);
             }
             
+            // Filter by client name
+            if ($request->has('client_name') && !empty($request->client_name)) {
+                $clientName = $request->client_name;
+                \Log::info('Filtering by client name:', ['client_name' => $clientName]);
+                $query->whereHas('client', function($q) use ($clientName) {
+                    $q->where('name', 'LIKE', '%' . $clientName . '%');
+                });
+            }
+            
             \Log::info('Applied filters:', [
                 'driver_id' => $request->driver_id,
                 'route_id' => $request->route_id,
                 'pickup_day' => $request->pickup_day,
+                'client_name' => $request->client_name,
                 'status' => $status
             ]);
 

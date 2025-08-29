@@ -449,6 +449,47 @@ class InvoiceController extends Controller
             $bucket['percentage'] = $totalUnpaidAmount > 0 ? ($bucket['totalAmount'] / $totalUnpaidAmount) * 100 : 0;
         }
         
+        // Calculate client-level aging
+        $clientAging = [];
+        $clientGroups = $overdueInvoices->groupBy('client_id');
+        
+        foreach ($clientGroups as $clientId => $clientInvoices) {
+            $client = $clientInvoices->first()->client;
+            $clientData = [
+                'clientId' => $clientId,
+                'clientName' => $client->name,
+                'current' => 0,
+                'days1to30' => 0,
+                'days31to60' => 0,
+                'days61to90' => 0,
+                'days90plus' => 0,
+                'total' => 0
+            ];
+            
+            foreach ($clientInvoices as $invoice) {
+                $dueDate = new \DateTime($invoice->due_date);
+                $now = new \DateTime();
+                $daysPastDue = $now->diff($dueDate)->days;
+                $outstandingAmount = floatval($invoice->amount) - floatval($invoice->paid_amount);
+                
+                if ($daysPastDue <= $gracePeriodDays) {
+                    $clientData['current'] += $outstandingAmount;
+                } elseif ($daysPastDue >= ($gracePeriodDays + 1) && $daysPastDue <= ($gracePeriodDays + 30)) {
+                    $clientData['days1to30'] += $outstandingAmount;
+                } elseif ($daysPastDue >= ($gracePeriodDays + 31) && $daysPastDue <= ($gracePeriodDays + 60)) {
+                    $clientData['days31to60'] += $outstandingAmount;
+                } elseif ($daysPastDue >= ($gracePeriodDays + 61) && $daysPastDue <= ($gracePeriodDays + 90)) {
+                    $clientData['days61to90'] += $outstandingAmount;
+                } elseif ($daysPastDue >= ($gracePeriodDays + 91)) {
+                    $clientData['days90plus'] += $outstandingAmount;
+                }
+                
+                $clientData['total'] += $outstandingAmount;
+            }
+            
+            $clientAging[] = $clientData;
+        }
+        
         $summary = [
             'totalUnpaidAmount' => $totalUnpaidAmount,
             'totalInvoices' => $overdueInvoices->count(),
@@ -457,6 +498,7 @@ class InvoiceController extends Controller
             'dueCount' => 0,
             'dueAmount' => 0,
             'agingBuckets' => $agingBuckets,
+            'clientAging' => $clientAging,
             'gracePeriodDays' => $gracePeriodDays,
             'message' => "Aging calculation starts after {$gracePeriodDays}-day grace period from due date"
         ];

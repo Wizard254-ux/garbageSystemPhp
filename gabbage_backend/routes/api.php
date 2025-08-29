@@ -45,9 +45,13 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
         
         foreach ($organizationUsers as $orgUser) {
             $orgUserDocuments = $orgUser->documents ?? [];
-            if (in_array($fileUrl, $orgUserDocuments) || in_array($oldUrl, $orgUserDocuments)) {
-                $hasAccess = true;
-                break;
+            // Handle both string URLs and object format
+            foreach ($orgUserDocuments as $doc) {
+                $docUrl = is_string($doc) ? $doc : ($doc['url'] ?? '');
+                if ($docUrl === $fileUrl || $docUrl === $oldUrl) {
+                    $hasAccess = true;
+                    break 2;
+                }
             }
         }
         
@@ -58,9 +62,13 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
             foreach ($clients as $client) {
                 if ($client->user) {
                     $clientUserDocuments = $client->user->documents ?? [];
-                    if (in_array($fileUrl, $clientUserDocuments) || in_array($oldUrl, $clientUserDocuments)) {
-                        $hasAccess = true;
-                        break;
+                    // Handle both string URLs and object format
+                    foreach ($clientUserDocuments as $doc) {
+                        $docUrl = is_string($doc) ? $doc : ($doc['url'] ?? '');
+                        if ($docUrl === $fileUrl || $docUrl === $oldUrl) {
+                            $hasAccess = true;
+                            break 2;
+                        }
                     }
                 }
             }
