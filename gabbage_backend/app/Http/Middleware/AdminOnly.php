@@ -20,7 +20,7 @@ class AdminOnly
             ], 401);
         }
         
-        if ($user->role !== 'admin') {
+        if (!in_array($user->role, ['admin', 'super_admin'])) {
             return response()->json([
                 'status' => false,
                 'error' => 'Forbidden',

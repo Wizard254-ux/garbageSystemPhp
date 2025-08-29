@@ -471,6 +471,9 @@ class PickupController extends Controller
             ->whereNotNull('serviceStartDate')
             ->whereRaw('LOWER(pickUpDay) = ?', [$todayName])
             ->whereDate('serviceStartDate', '<=', $today)
+            ->whereHas('user', function($query) {
+                $query->where('isActive', true);
+            })
             ->get();
 
         // Filter out clients who are already picked this week
@@ -507,6 +510,9 @@ class PickupController extends Controller
                 ->whereNotNull('serviceStartDate')
                 ->whereRaw('LOWER(pickUpDay) = ?', [$dayName])
                 ->whereDate('serviceStartDate', '<=', $currentDate)
+                ->whereHas('user', function($query) {
+                    $query->where('isActive', true);
+                })
                 ->get();
                 
             $weekClients = $weekClients->merge($dayClients);
@@ -539,6 +545,9 @@ class PickupController extends Controller
             ->whereNotNull('serviceStartDate')
             ->whereRaw('LOWER(pickUpDay) = ?', [$dayName])
             ->whereDate('serviceStartDate', '<=', $date)
+            ->whereHas('user', function($query) {
+                $query->where('isActive', true);
+            })
             ->get();
 
         return $clients;
@@ -845,6 +854,53 @@ class PickupController extends Controller
                 'routes' => $routesSummary
             ]
         ], 200);
+    }
+
+    public function getRouteClients(Request $request)
+    {
+        try {
+            $driverId = $request->user()->id;
+            
+            // Check if driver is active on any route
+            $activeRoute = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driverId)
+                ->where('is_active', true)
+                ->first();
+                
+            if (!$activeRoute) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'No active route',
+                    'message' => 'You are not active on any route. Please activate a route first.'
+                ], 400);
+            }
+            
+            // Get clients on the active route
+            $clients = Client::with(['user'])
+                ->where('route_id', $activeRoute->route_id)
+                ->whereHas('user', function($query) {
+                    $query->where('isActive', true);
+                })
+                ->get();
+                
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'clients' => $clients,
+                    'route' => [
+                        'id' => $activeRoute->route->id,
+                        'name' => $activeRoute->route->name
+                    ]
+                ]
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get route clients',
+                'message' => $e->getMessage()
+            ], 500);
+        }
     }
 
     public function createPickup(Request $request)

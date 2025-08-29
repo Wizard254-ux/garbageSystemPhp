@@ -158,18 +158,28 @@ class AuthController extends Controller
             'name'=>'required|string|max:255',
             'email'=>'required|email|unique:users,email',
             'password'=>'required|string|min:6|max:20',
+            'SUPER_ADMIN_KEY'=>'required|string',
         ]);
 
         if(!$validator->fails()){
+            // Validate super admin key
+            if($request->SUPER_ADMIN_KEY !== env('SUPER_ADMIN_KEY')) {
+                return response()->json([
+                    'status'=>false,
+                    'error'=>'Invalid key',
+                    'message'=>'Invalid super admin key'
+                ],403);
+            }
+            
             $user=User::create([
                 'name'=>$request->name,
                 'email'=>$request->email,
                 'password'=>Hash::make($request->password),
-                'role'=>'admin'
+                'role'=>'super_admin'
             ]);
             return response()->json([
                 'status'=>true,
-                'message'=>'Admin Created Successfully',
+                'message'=>'Super Admin Created Successfully',
                 'data'=>['user'=>$user]
             ],200);
         }else{
@@ -207,6 +217,7 @@ class AuthController extends Controller
                 'phone'=>$request->phone,
                 'address'=>$request->address,
                 'documents'=>$processedDocuments,
+                'isActive'=>true,
                 'isSent'=>false
             ]);
             
@@ -379,8 +390,17 @@ class AuthController extends Controller
 
     public function ListAdmins(Request $request)
     {
-        $admins = User::where('role', 'admin')
-                     ->select('id', 'name', 'email', 'phone', 'created_at')
+        // Only super_admin can view admin list
+        if ($request->user()->role !== 'super_admin') {
+            return response()->json([
+                'status' => false,
+                'error' => 'Forbidden',
+                'message' => 'Only super admin can view admin list'
+            ], 403);
+        }
+        
+        $admins = User::whereIn('role', ['admin', 'super_admin'])
+                     ->select('id', 'name', 'email', 'phone', 'role', 'isActive', 'created_by', 'created_at')
                      ->orderBy('created_at', 'desc')
                      ->get();
         
@@ -439,12 +459,14 @@ class AuthController extends Controller
                 'email'=>$request->email,
                 'password'=>Hash::make($request->password),
                 'role'=>'admin',
-                'phone'=>$request->phone
+                'phone'=>$request->phone,
+                'created_by'=>$request->user()->id,
+                'isActive'=>true
             ]);
             return response()->json([
                 'status'=>true,
                 'message'=>'Admin created successfully',
-                'data'=>['admin'=>$user]
+                'data'=>['admin'=>$user->fresh()]
             ],200);
         }else{
             return response()->json([
@@ -453,6 +475,161 @@ class AuthController extends Controller
                 'errors'=>$validator->errors()
             ],401);
         }
+    }
+
+    public function updateAdmin(Request $request, $id)
+    {
+        $admin = User::where('id', $id)->where('role', 'admin')->first();
+        
+        if (!$admin) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Admin not found'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $id,
+            'phone' => 'nullable|string|max:20',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data'
+            ], 422);
+        }
+
+        $admin->update([
+            'name' => $request->name,
+            'email' => $request->email,
+            'phone' => $request->phone,
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Admin updated successfully',
+            'data' => ['admin' => $admin->fresh()]
+        ], 200);
+    }
+
+    public function deleteAdmin(Request $request, $id)
+    {
+        $admin = User::where('id', $id)->whereIn('role', ['admin', 'super_admin'])->first();
+        
+        if (!$admin) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Admin not found'
+            ], 404);
+        }
+
+        // Super admin can delete any admin, but for super_admin deletion, only creator can delete
+        if ($admin->role === 'super_admin' && $admin->created_by !== $request->user()->id) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'You are not authorized to delete this Super Admin since you were not the one who created them'
+            ], 403);
+        }
+        
+        // For regular admins, super_admin can delete any, regular admin can only delete their own
+        if ($admin->role === 'admin' && $request->user()->role !== 'super_admin' && $admin->created_by !== $request->user()->id) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Unauthorized',
+                'message' => 'You are not authorized to delete this Admin'
+            ], 403);
+        }
+
+        $admin->delete();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Admin deleted successfully'
+        ], 200);
+    }
+
+    public function getAdmin(Request $request, $id)
+    {
+        $admin = User::where('id', $id)->where('role', 'admin')->first();
+        
+        if (!$admin) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Admin not found'
+            ], 404);
+        }
+
+        return response()->json([
+            'status' => true,
+            'data' => ['admin' => $admin]
+        ], 200);
+    }
+
+    public function deactivateAdmin(Request $request, $id)
+    {
+        $admin = User::where('id', $id)->whereIn('role', ['admin', 'super_admin'])->first();
+        
+        if (!$admin) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Admin not found'
+            ], 404);
+        }
+
+        // For super_admin deactivation, only creator can deactivate
+        if ($admin->role === 'super_admin' && $admin->created_by !== $request->user()->id) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Forbidden',
+                'message' => 'You are not authorized to deactivate this Super Admin since you were not the one who created them'
+            ], 403);
+        }
+
+        $admin->update(['isActive' => !$admin->isActive]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Admin status updated successfully',
+            'data' => ['admin' => $admin->fresh()]
+        ], 200);
+    }
+
+    public function makeSuperAdmin(Request $request, $id)
+    {
+        // Only super_admin can promote others
+        if ($request->user()->role !== 'super_admin') {
+            return response()->json([
+                'status' => false,
+                'error' => 'Forbidden',
+                'message' => 'Only super admin can promote others'
+            ], 403);
+        }
+
+        $admin = User::where('id', $id)->where('role', 'admin')->first();
+        
+        if (!$admin) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Not found',
+                'message' => 'Admin not found'
+            ], 404);
+        }
+
+        $admin->update(['role' => 'super_admin']);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Admin promoted to Super Admin successfully',
+            'data' => ['admin' => $admin->fresh()]
+        ], 200);
     }
 
     // Organization-specific methods
@@ -970,22 +1147,31 @@ class AuthController extends Controller
     // Admin Dashboard Methods
     public function getAdminDashboardStats(Request $request)
     {
-        $totalOrganizations = User::where('role', 'organization')->count();
-        $activeOrganizations = User::where('role', 'organization')->where('isActive', true)->count();
-        $totalDrivers = User::where('role', 'driver')->count();
-        $totalClients = User::where('role', 'client')->count();
-        $totalAdmins = User::where('role', 'admin')->count();
-        
-        return response()->json([
-            'status' => true,
-            'data' => [
-                'totalOrganizations' => $totalOrganizations,
-                'activeOrganizations' => $activeOrganizations,
-                'totalDrivers' => $totalDrivers,
-                'totalClients' => $totalClients,
-                'totalAdmins' => $totalAdmins
-            ]
-        ], 200);
+        try {
+            $totalOrganizations = User::where('role', 'organization')->count();
+            $activeOrganizations = User::where('role', 'organization')->where('isActive', true)->count();
+            $totalDrivers = User::where('role', 'driver')->count();
+            $totalClients = User::where('role', 'client')->count();
+            $totalAdmins = User::where('role', 'admin')->count();
+            
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'totalOrganizations' => $totalOrganizations,
+                    'activeOrganizations' => $activeOrganizations,
+                    'totalDrivers' => $totalDrivers,
+                    'totalClients' => $totalClients,
+                    'totalAdmins' => $totalAdmins
+                ]
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Server error',
+                'message' => 'Failed to fetch dashboard statistics'
+            ], 500);
+        }
     }
 
     public function listOrganizations(Request $request)
@@ -1154,8 +1340,10 @@ class AuthController extends Controller
                 ->where('is_active', true)
                 ->first();
 
-            // Get bag stats
-            $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $driverId)->first();
+            // Get bag stats (only active allocations)
+            $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $driverId)
+                ->where('status', 1)
+                ->first();
 
             return response()->json([
                 'status' => true,
@@ -1224,10 +1412,10 @@ class AuthController extends Controller
     public function updateProfile(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'email' => 'required|email|unique:users,email,' . $request->user()->id,
+            'name' => 'nullable|string|max:255',
+            'email' => 'nullable|email|unique:users,email,' . $request->user()->id,
             'phone' => 'nullable|string|max:20',
-            'profile_image' => 'nullable|image|mimes:jpeg,png,jpg|max:5120', // 5MB max
+            'profile_image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:5120', // 5MB max
         ]);
 
         if ($validator->fails()) {
@@ -1242,26 +1430,59 @@ class AuthController extends Controller
         }
 
         $user = $request->user();
-        $user->name = $request->name;
-        $user->email = $request->email;
-        if ($request->phone) {
+        
+        // Update profile fields only if provided
+        if ($request->has('name')) {
+            $user->name = $request->name;
+        }
+        if ($request->has('email')) {
+            $user->email = $request->email;
+        }
+        if ($request->has('phone')) {
             $user->phone = $request->phone;
         }
         
         // Handle profile image upload
         if ($request->hasFile('profile_image')) {
-            $file = $request->file('profile_image');
-            $filename = time() . '_profile_' . $file->getClientOriginalName();
-            $path = $file->storeAs('documents', $filename, 'public');
-            $user->profile_image = url('/api/storage/documents/' . $filename);
+            try {
+                $file = $request->file('profile_image');
+                $filename = time() . '_profile_' . $user->id . '.' . $file->getClientOriginalExtension();
+                
+                // Store file in public/documents directory
+                $path = $file->storeAs('documents', $filename, 'public');
+                
+                // Delete old profile image if exists
+                if ($user->profile_image) {
+                    $oldFilename = basename(parse_url($user->profile_image, PHP_URL_PATH));
+                    $oldFilePath = storage_path('app/public/documents/' . $oldFilename);
+                    if (file_exists($oldFilePath)) {
+                        unlink($oldFilePath);
+                    }
+                }
+                
+                // Update user profile image URL
+                $imageUrl = url('/api/storage/documents/' . $filename);
+                \Log::info('Generated profile image URL: ' . $imageUrl);
+                $user->profile_image = $imageUrl;
+                
+            } catch (\Exception $e) {
+                \Log::error('Profile image upload error: ' . $e->getMessage());
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Image upload failed',
+                    'message' => 'Failed to upload profile image'
+                ], 500);
+            }
         }
         
         $user->save();
+        
+        \Log::info('User saved with profile_image: ' . $user->profile_image);
 
         return response()->json([
             'status' => true,
             'message' => 'Profile updated successfully',
-            'data' => ['user' => $user]
+            'data' => ['user' => $user->fresh()]
         ], 200);
     }
 }

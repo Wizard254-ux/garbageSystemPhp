@@ -29,6 +29,8 @@ class User extends Authenticatable
         'organization_id',
         'isActive',
         'isSent',
+        'created_by',
+        'profile_image',
     ];
 
     /**

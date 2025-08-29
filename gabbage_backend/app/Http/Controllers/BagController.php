@@ -322,7 +322,9 @@ class BagController extends Controller
     {
         $driverId = $request->user()->id;
         
-        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+        $allocation = DriverBagsAllocation::where('driver_id', $driverId)
+            ->where('status', 1)
+            ->first();
 
         return response()->json([
             'status' => true,
@@ -388,7 +390,9 @@ class BagController extends Controller
     {
         $driverId = $request->user()->id;
         
-        $allocation = DriverBagsAllocation::where('driver_id', $driverId)->first();
+        $allocation = DriverBagsAllocation::where('driver_id', $driverId)
+            ->where('status', 1)
+            ->first();
 
         return response()->json([
             'status' => true,

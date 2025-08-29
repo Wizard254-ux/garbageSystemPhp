@@ -17,9 +17,27 @@ class BagIssueController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'client_id' => 'required|integer',
-            'contact' => 'required|email',
-            'number_of_bags' => 'required|integer|min:1'
+            'contact' => 'required|string',
+            'number_of_bags' => 'required|integer|min:1',
+            'otp_method' => 'required|in:email,sms'
         ]);
+        
+        // Additional validation based on OTP method
+        if ($request->otp_method === 'email' && !filter_var($request->contact, FILTER_VALIDATE_EMAIL)) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Invalid email',
+                'message' => 'Please provide a valid email address'
+            ], 422);
+        }
+        
+        if ($request->otp_method === 'sms' && !preg_match('/^(\+?254|0)[17]\d{8}$/', $request->contact)) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Invalid phone number',
+                'message' => 'Please provide a valid Kenyan phone number (e.g., 0794709253 or +254794709253)'
+            ], 422);
+        }
 
         if ($validator->fails()) {
             return response()->json([
@@ -67,31 +85,87 @@ class BagIssueController extends Controller
         $bagIssue = BagIssue::create([
             'driver_id' => $driverId,
             'client_id' => $client->user_id, // Use the user_id from client record
-            'client_email' => $request->contact,
+            'client_email' => $request->otp_method === 'email' ? $request->contact : $client->user->email,
             'number_of_bags_issued' => $request->number_of_bags,
             'otp_code' => $otpCode,
             'otp_expires_at' => now()->addMinutes(10),
             'is_verified' => false
         ]);
 
-        // Send OTP via email
-        try {
-            Mail::raw("Your OTP for bag collection is: {$otpCode}. This code expires in 10 minutes.", function($message) use ($request) {
-                $message->to($request->contact)
-                        ->subject('Bag Collection OTP');
-            });
-        } catch (\Exception $e) {
-            \Log::error('Failed to send OTP email: ' . $e->getMessage());
+        // Send OTP based on method
+        if ($request->otp_method === 'email') {
+            try {
+                Mail::raw("Your OTP for bag collection is: {$otpCode}. This code expires in 10 minutes.", function($message) use ($request) {
+                    $message->to($request->contact)
+                            ->subject('Bag Collection OTP');
+                });
+            } catch (\Exception $e) {
+                \Log::error('Failed to send OTP email: ' . $e->getMessage());
+            }
+        } else {
+            // Send SMS via Africa's Talking
+            try {
+                $this->sendSmsOtp($request->contact, $otpCode);
+            } catch (\Exception $e) {
+                \Log::error('Failed to send OTP SMS: ' . $e->getMessage());
+            }
         }
 
         return response()->json([
             'status' => true,
-            'message' => 'OTP sent to client email successfully',
+            'message' => 'OTP sent to client ' . ($request->otp_method === 'email' ? 'email' : 'phone') . ' successfully',
             'data' => [
                 'bag_issue_id' => $bagIssue->id,
                 'expires_at' => $bagIssue->otp_expires_at
             ]
         ], 200);
+    }
+    
+    private function sendSmsOtp($phoneNumber, $otpCode)
+    {
+        // Format phone number for Kenya (+254)
+        $phone = $phoneNumber;
+        if (substr($phone, 0, 1) === '0') {
+            $phone = '254' . substr($phone, 1);
+        } elseif (substr($phone, 0, 3) !== '254') {
+            $phone = '254' . $phone;
+        }
+        
+        $username = env('AT_USERNAME', 'mytenant');
+        $apiKey = env('AT_API_KEY', 'atsk_ccc9e745eec33b9260845ce444dfa5e81d1ff1d400b15085cc71b154dee203ff00a0d077');
+        $senderId = env('AT_SENDER_ID', 'KODIBOOKS');
+        
+        $message = "Your OTP for bag collection is: {$otpCode}. This code expires in 10 minutes.";
+        
+        $postData = [
+            'username' => $username,
+            'to' => '+' . $phone,
+            'message' => $message,
+            'from' => $senderId
+        ];
+        
+        $url = 'https://api.africastalking.com/version1/messaging';
+        
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postData));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Accept: application/json',
+            'Content-Type: application/x-www-form-urlencoded',
+            'apiKey: ' . $apiKey
+        ]);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        
+        \Log::info('SMS API Response:', ['response' => $response, 'http_code' => $httpCode]);
+        
+        if ($httpCode !== 201) {
+            throw new \Exception('Failed to send SMS: ' . $response);
+        }
     }
 
     public function verifyOtp(Request $request)
@@ -181,6 +255,26 @@ class BagIssueController extends Controller
                     'driver_remaining' => $allocation->fresh()->available_bags
                 ]
             ]);
+            
+            // Send notification email to client
+            try {
+                $clientEmail = $client->email ?? $bagIssue->client_email;
+                if ($clientEmail) {
+                    Mail::raw(
+                        "Dear {$client->name},\n\n" .
+                        "This is to confirm that {$bagIssue->number_of_bags_issued} garbage bags have been issued to you by driver {$request->user()->name}.\n\n" .
+                        "Collection Date: " . now()->format('Y-m-d H:i:s') . "\n\n" .
+                        "Thank you for using our waste management service.\n\n" .
+                        "Best regards,\nWaste Management Team",
+                        function($message) use ($clientEmail) {
+                            $message->to($clientEmail)
+                                    ->subject('Bag Collection Confirmation');
+                        }
+                    );
+                }
+            } catch (\Exception $e) {
+                \Log::error('Failed to send notification email: ' . $e->getMessage());
+            }
         });
 
         return response()->json([
