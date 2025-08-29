@@ -1120,5 +1120,126 @@ class AuthController extends Controller
         ], 200);
     }
 
+    public function getDriverDashboardStats(Request $request)
+    {
+        try {
+            $driverId = $request->user()->id;
+
+            // Get active route
+            $activeRoute = \App\Models\DriverRoute::with('route')
+                ->where('driver_id', $driverId)
+                ->where('is_active', true)
+                ->first();
+
+            // Get bag stats
+            $allocation = \App\Models\DriverBagsAllocation::where('driver_id', $driverId)->first();
+
+            return response()->json([
+                'status' => true,
+                'data' => [
+                    'active_route' => $activeRoute ? [
+                        'id' => $activeRoute->route->id,
+                        'name' => $activeRoute->route->name,
+                        'path' => $activeRoute->route->path ?? null
+                    ] : null,
+                    'bag_stats' => [
+                        'allocated_bags' => $allocation ? $allocation->allocated_bags : 0,
+                        'used_bags' => $allocation ? $allocation->used_bags : 0,
+                        'available_bags' => $allocation ? $allocation->available_bags : 0
+                    ]
+                ]
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get dashboard stats',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function changePassword(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'currentPassword' => 'required|string',
+            'newPassword' => 'required|string|min:6',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 422);
+        }
+
+        $user = $request->user();
+
+        // Verify current password
+        if (!Hash::check($request->currentPassword, $user->password)) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Invalid current password',
+                'message' => 'The current password is incorrect'
+            ], 401);
+        }
+
+        // Update password
+        $user->password = Hash::make($request->newPassword);
+        $user->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Password changed successfully'
+        ], 200);
+    }
+
+    public function updateProfile(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email,' . $request->user()->id,
+            'phone' => 'nullable|string|max:20',
+            'profile_image' => 'nullable|image|mimes:jpeg,png,jpg|max:5120', // 5MB max
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Validation failed',
+                'message' => 'Invalid input data',
+                'details' => collect($validator->errors())->map(function($messages, $field) {
+                    return ['field' => $field, 'message' => $messages[0]];
+                })->values()
+            ], 422);
+        }
+
+        $user = $request->user();
+        $user->name = $request->name;
+        $user->email = $request->email;
+        if ($request->phone) {
+            $user->phone = $request->phone;
+        }
+        
+        // Handle profile image upload
+        if ($request->hasFile('profile_image')) {
+            $file = $request->file('profile_image');
+            $filename = time() . '_profile_' . $file->getClientOriginalName();
+            $path = $file->storeAs('documents', $filename, 'public');
+            $user->profile_image = url('/api/storage/documents/' . $filename);
+        }
+        
+        $user->save();
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Profile updated successfully',
+            'data' => ['user' => $user]
+        ], 200);
+    }
 }
 

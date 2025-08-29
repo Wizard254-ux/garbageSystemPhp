@@ -35,7 +35,7 @@ class Client extends Model
         'pickUpDay',
         'gracePeriod',
         'serviceStartDate',
-        'accountNumber'
+        'accountNumber',
     ];
 
     protected $casts = [
@@ -56,5 +56,10 @@ class Client extends Model
     public function route(): BelongsTo
     {
         return $this->belongsTo(Route::class);
+    }
+
+    public function registeredByDriver(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'registered_by_driver');
     }
 }

@@ -249,4 +249,62 @@ class RouteController extends Controller
             'message' => 'Route deleted successfully'
         ], 200);
     }
+
+    public function getDriverRoutes(Request $request)
+    {
+        try {
+            $driverId = $request->user()->id;
+            $organizationId = $request->user()->organization_id;
+            
+            // Get all routes for the driver's organization
+            $routes = Route::where('organization_id', $organizationId)
+                ->select('id', 'name', 'path', 'description')
+                ->get();
+            
+            return response()->json([
+                'status' => true,
+                'data' => ['routes' => $routes]
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get routes',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function getDriverRouteDetails(Request $request, $id)
+    {
+        try {
+            $driverId = $request->user()->id;
+            $organizationId = $request->user()->organization_id;
+            
+            // Get route details for the driver's organization
+            $route = Route::where('organization_id', $organizationId)
+                ->where('id', $id)
+                ->first();
+            
+            if (!$route) {
+                return response()->json([
+                    'status' => false,
+                    'error' => 'Not found',
+                    'message' => 'Route not found'
+                ], 404);
+            }
+            
+            return response()->json([
+                'status' => true,
+                'data' => ['route' => $route]
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => false,
+                'error' => 'Failed to get route details',
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
 }

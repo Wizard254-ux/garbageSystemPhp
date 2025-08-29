@@ -326,13 +326,9 @@ class BagController extends Controller
 
         return response()->json([
             'status' => true,
-            'data' => [
-                'bags' => $allocation ?? [
-                    'allocated_bags' => 0,
-                    'used_bags' => 0,
-                    'available_bags' => 0
-                ]
-            ]
+            'allocated_bags' => $allocation ? $allocation->allocated_bags : 0,
+            'used_bags' => $allocation ? $allocation->used_bags : 0,
+            'available_bags' => $allocation ? $allocation->available_bags : 0
         ], 200);
     }
 
