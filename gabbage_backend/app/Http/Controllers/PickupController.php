@@ -17,7 +17,8 @@ class PickupController extends Controller
         \Log::info('Driver ID:', ['driver_id' => $request->user()->id]);
 
         $validator = Validator::make($request->all(), [
-            'client_id' => 'required|exists:users,id'
+            'pickup_id' => 'required|integer',
+            'status' => 'required|in:picked'
         ]);
 
         if ($validator->fails()) {
@@ -28,12 +29,12 @@ class PickupController extends Controller
                 'details' => collect($validator->errors())->map(function($messages, $field) {
                     return ['field' => $field, 'message' => $messages[0]];
                 })->values()
-            ], 401);
+            ], 422);
         }
 
         try {
             $driverId = $request->user()->id;
-            $clientId = $request->client_id;
+            $clientId = $request->pickup_id; // This is actually the client ID from the frontend
             $today = Carbon::now();
             $weekStart = $today->copy()->startOfWeek();
             $weekEnd = $today->copy()->endOfWeek();
@@ -46,15 +47,39 @@ class PickupController extends Controller
                 'week_end' => $weekEnd->toDateString()
             ]);
 
-            // Get client details
-            $client = Client::where('user_id', $clientId)->first();
+            // Get client details - try both user_id and id fields
+            $client = Client::where('user_id', $clientId)
+                ->orWhere('id', $clientId)
+                ->first();
+                
             if (!$client) {
+                // If not found in clients table, check if it's a user ID directly
+                $user = \App\Models\User::where('id', $clientId)
+                    ->where('role', 'client')
+                    ->first();
+                    
+                if ($user) {
+                    // Find client record by user_id
+                    $client = Client::where('user_id', $user->id)->first();
+                }
+            }
+            
+            if (!$client) {
+                \Log::error('Client not found:', [
+                    'lookup_id' => $clientId,
+                    'tried_user_id' => true,
+                    'tried_client_id' => true
+                ]);
+                
                 return response()->json([
                     'status' => false,
                     'error' => 'Client not found',
-                    'message' => 'Client record not found'
+                    'message' => 'Client record not found for ID: ' . $clientId
                 ], 404);
             }
+            
+            // Use the actual user_id for pickup operations
+            $clientUserId = $client->user_id;
 
             \Log::info('Client found:', [
                 'client_id' => $client->id,
@@ -85,7 +110,7 @@ class PickupController extends Controller
             ]);
 
             // Check if pickup already exists for this week
-            $existingPickup = Pickup::where('client_id', $clientId)
+            $existingPickup = Pickup::where('client_id', $clientUserId)
                 ->whereBetween('pickup_date', [$weekStart, $weekEnd])
                 ->first();
 
@@ -136,7 +161,7 @@ class PickupController extends Controller
 
             // Create new pickup record
             $pickup = Pickup::create([
-                'client_id' => $clientId,
+                'client_id' => $clientUserId,
                 'route_id' => $client->route_id,
                 'driver_id' => $driverId,
                 'pickup_status' => 'picked',
@@ -146,7 +171,8 @@ class PickupController extends Controller
 
             \Log::info('Created new pickup:', [
                 'pickup_id' => $pickup->id,
-                'client_id' => $clientId,
+                'client_id' => $clientUserId,
+                'original_lookup_id' => $clientId,
                 'driver_id' => $driverId,
                 'pickup_date' => $pickup->pickup_date
             ]);

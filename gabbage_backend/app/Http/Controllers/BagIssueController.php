@@ -16,8 +16,8 @@ class BagIssueController extends Controller
     public function requestOtp(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'client_id' => 'required|exists:users,id',
-            'client_email' => 'required|email',
+            'client_id' => 'required|integer',
+            'contact' => 'required|email',
             'number_of_bags' => 'required|integer|min:1'
         ]);
 
@@ -29,23 +29,15 @@ class BagIssueController extends Controller
                 'details' => collect($validator->errors())->map(function($messages, $field) {
                     return ['field' => $field, 'message' => $messages[0]];
                 })->values()
-            ], 401);
+            ], 422);
         }
 
         $driverId = $request->user()->id;
         
         // Check if client belongs to driver's organization using clients table
-        $client = \App\Models\Client::where('user_id', $request->client_id)
+        $client = \App\Models\Client::where('id', $request->client_id)
             ->where('organization_id', $request->user()->organization_id)
             ->first();
-
-        if (!$client) {
-            return response()->json([
-                'status' => false,
-                'error' => 'Invalid client',
-                'message' => 'Client not found or does not belong to your organization'
-            ], 404);
-        }
 
         if (!$client) {
             return response()->json([
@@ -74,8 +66,8 @@ class BagIssueController extends Controller
         // Create bag issue record
         $bagIssue = BagIssue::create([
             'driver_id' => $driverId,
-            'client_id' => $request->client_id,
-            'client_email' => $request->client_email,
+            'client_id' => $client->user_id, // Use the user_id from client record
+            'client_email' => $request->contact,
             'number_of_bags_issued' => $request->number_of_bags,
             'otp_code' => $otpCode,
             'otp_expires_at' => now()->addMinutes(10),
@@ -85,7 +77,7 @@ class BagIssueController extends Controller
         // Send OTP via email
         try {
             Mail::raw("Your OTP for bag collection is: {$otpCode}. This code expires in 10 minutes.", function($message) use ($request) {
-                $message->to($request->client_email)
+                $message->to($request->contact)
                         ->subject('Bag Collection OTP');
             });
         } catch (\Exception $e) {

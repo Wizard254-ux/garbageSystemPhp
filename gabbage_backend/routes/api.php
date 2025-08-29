@@ -94,6 +94,8 @@ Route::prefix('auth')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::post('/refresh-token', [AuthController::class, 'refreshToken']);
+        Route::post('/change-password', [AuthController::class, 'changePassword']);
+        Route::post('/update-profile', [AuthController::class, 'updateProfile'])->middleware('file.uploads');
         Route::post('/create-organization', [AuthController::class, 'createOrganization'])->middleware(['admin.only', 'file.uploads']);
         Route::post('/organization/manage', [AuthController::class, 'manageOrganization'])->middleware('admin.only');
     });
@@ -171,6 +173,9 @@ Route::prefix('organization')->middleware(['auth:sanctum'])->group(function () {
         Route::post('/issue/request', [BagIssueController::class, 'requestOtp']);
         Route::post('/issue/verify', [BagIssueController::class, 'verifyOtp']);
         Route::get('/issues/list', [BagIssueController::class, 'index']);
+        
+        // Bag transfers for organization view
+        Route::get('/transfers', [BagTransferController::class, 'getOrganizationTransfers']);
     });
     
     // Pickups management
@@ -220,6 +225,8 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
     Route::get('/recent-activity', [\App\Http\Controllers\Auth\AuthController::class, 'getRecentActivity']);
     Route::get('/pickups/today-summary', [\App\Http\Controllers\PickupController::class, 'getTodayPickupsSummary']);
     Route::get('/financial-summary', [\App\Http\Controllers\PaymentController::class, 'getFinancialSummary']);
+    Route::post('/register-client', [\App\Http\Controllers\DriverController::class, 'registerClient'])->middleware('file.uploads');
+    Route::get('/organization/routes', [\App\Http\Controllers\DriverController::class, 'getOrganizationRoutes']);
 });
 
 // M-Pesa Callback (no auth required)

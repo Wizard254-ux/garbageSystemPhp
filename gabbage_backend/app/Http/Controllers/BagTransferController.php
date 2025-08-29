@@ -19,7 +19,8 @@ class BagTransferController extends Controller
         $validator = Validator::make($request->all(), [
             'to_driver_id' => 'required|exists:users,id',
             'number_of_bags' => 'required|integer|min:1',
-            'notes' => 'nullable|string|max:255'
+            'notes' => 'nullable|string|max:255',
+            'contact' => 'nullable|email'
         ]);
 
         if ($validator->fails()) {
@@ -75,17 +76,23 @@ class BagTransferController extends Controller
             'notes' => $request->notes
         ]);
 
-        // Send OTP to receiving driver's email
+        // Send OTP to custom email or receiving driver's email
+        $emailAddress = $request->contact ?: $toDriver->email;
         try {
-            Mail::raw("Your bag transfer OTP is: {$otpCode}. This code expires in 15 minutes.", function ($message) use ($toDriver) {
-                $message->to($toDriver->email)
+            Mail::raw("Your bag transfer OTP is: {$otpCode}. This code expires in 15 minutes. Transfer from {$request->user()->name} to {$toDriver->name} for {$request->number_of_bags} bags.", function ($message) use ($emailAddress) {
+                $message->to($emailAddress)
                     ->subject('Bag Transfer OTP - GreenLife');
             });
         } catch (\Exception $e) {
+            \Log::error('Failed to send bag transfer OTP email', [
+                'error' => $e->getMessage(),
+                'email' => $emailAddress,
+                'transfer_id' => $transfer->id ?? null
+            ]);
             return response()->json([
                 'status' => false,
                 'error' => 'Email failed',
-                'message' => 'Failed to send OTP email'
+                'message' => 'Failed to send OTP email: ' . $e->getMessage()
             ], 500);
         }
 
@@ -131,7 +138,8 @@ class BagTransferController extends Controller
 
         $transfer = BagTransfer::with(['fromDriver', 'toDriver'])->find($request->transfer_id);
 
-        if ($transfer->to_driver_id !== $request->user()->id) {
+        // Allow both the sending driver and receiving driver to complete the transfer
+        if ($transfer->to_driver_id !== $request->user()->id && $transfer->from_driver_id !== $request->user()->id) {
             return response()->json([
                 'status' => false,
                 'error' => 'Unauthorized',
@@ -219,6 +227,21 @@ class BagTransferController extends Controller
         return response()->json([
             'status' => true,
             'data' => $transfers
+        ], 200);
+    }
+
+    public function getOrganizationTransfers(Request $request)
+    {
+        $organizationId = $request->user()->id;
+        
+        $transfers = BagTransfer::with(['fromDriver:id,name', 'toDriver:id,name'])
+            ->where('organization_id', $organizationId)
+            ->orderBy('created_at', 'desc')
+            ->paginate(50);
+
+        return response()->json([
+            'status' => true,
+            'data' => $transfers->items()
         ], 200);
     }
 }

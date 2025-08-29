@@ -258,7 +258,6 @@ class RouteController extends Controller
             
             // Get all routes for the driver's organization
             $routes = Route::where('organization_id', $organizationId)
-                ->where('isActive', true)
                 ->select('id', 'name', 'path', 'description')
                 ->get();
             
