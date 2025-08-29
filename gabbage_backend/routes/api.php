@@ -18,6 +18,23 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
     // Check for token in query parameter or Authorization header
     $token = $request->query('token') ?? $request->bearerToken();
     
+    // For profile images, allow access if filename matches pattern and user exists
+    if (preg_match('/^\d+_profile_\d+\.(jpg|jpeg|png|gif)$/', $filename)) {
+        // Extract user ID from filename (format: timestamp_profile_userid.ext)
+        preg_match('/_(\d+)\.(jpg|jpeg|png|gif)$/', $filename, $matches);
+        if (isset($matches[1])) {
+            $userId = $matches[1];
+            $user = \App\Models\User::find($userId);
+            if ($user && $user->profile_image && str_contains($user->profile_image, $filename)) {
+                // Allow access to profile image
+                $path = storage_path('app/public/documents/' . $filename);
+                if (file_exists($path)) {
+                    return response()->file($path);
+                }
+            }
+        }
+    }
+    
     if (!$token) {
         return response()->json(['status' => false, 'error' => 'Unauthorized', 'message' => 'Access token is required'], 401);
     }
@@ -67,7 +84,8 @@ Route::get('/storage/documents/{filename}', function (Request $request, $filenam
         }
     }
     
-    if (!$hasAccess) {
+    // Admin and super_admin users have access to all files
+    if (!$hasAccess && !in_array($user->role, ['admin', 'super_admin'])) {
         abort(403, 'Unauthorized access to file');
     }
     
@@ -220,6 +238,10 @@ Route::prefix('driver')->middleware(['auth:sanctum', 'driver.only'])->group(func
         Route::get('/active', [\App\Http\Controllers\PickupController::class, 'getActiveRoutes']);
     });
     
+    Route::prefix('route')->group(function () {
+        Route::get('/clients', [\App\Http\Controllers\PickupController::class, 'getRouteClients']);
+    });
+    
     // Dashboard endpoints
     Route::get('/stats', [\App\Http\Controllers\Auth\AuthController::class, 'getOrganizationDashboardStats']);
     Route::get('/recent-activity', [\App\Http\Controllers\Auth\AuthController::class, 'getRecentActivity']);
@@ -237,6 +259,9 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin.only'])->group(functi
     // Dashboard
     Route::get('/dashboard/stats', [AuthController::class, 'getAdminDashboardStats']);
     
+    // File uploads
+    Route::post('/upload-files', [\App\Http\Controllers\FileController::class, 'uploadFiles']);
+    
     // Organizations management
     Route::prefix('organizations')->group(function () {
         Route::get('/', [AuthController::class, 'listOrganizations']);
@@ -249,7 +274,15 @@ Route::prefix('admin')->middleware(['auth:sanctum', 'admin.only'])->group(functi
     Route::prefix('admins')->group(function () {
         Route::get('/list', [AuthController::class, 'listAdmins']);
         Route::post('/create', [AuthController::class, 'createAdminByAdmin']);
+        Route::get('/{id}', [AuthController::class, 'getAdmin']);
+        Route::put('/{id}', [AuthController::class, 'updateAdmin']);
+        Route::delete('/{id}', [AuthController::class, 'deleteAdmin']);
+        Route::post('/{id}/deactivate', [AuthController::class, 'deactivateAdmin']);
+        Route::post('/{id}/make-super', [AuthController::class, 'makeSuperAdmin']);
     });
+    
+    // Profile management
+    Route::put('/profile', [AuthController::class, 'updateProfile']);
     
     // Activity logs
     Route::get('/activity-logs', [AuthController::class, 'getActivityLogs']);

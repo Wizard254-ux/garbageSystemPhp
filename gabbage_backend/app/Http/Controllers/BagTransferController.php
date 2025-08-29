@@ -172,17 +172,36 @@ class BagTransferController extends Controller
         }
 
         DB::transaction(function () use ($transfer) {
-            // Update sender allocation
-            $senderAllocation = DriverBagsAllocation::where('driver_id', $transfer->from_driver_id)->first();
-            $senderAllocation->decrement('available_bags', $transfer->number_of_bags);
+            // Update sender allocation (only active status = 1)
+            $senderAllocation = DriverBagsAllocation::where('driver_id', $transfer->from_driver_id)
+                ->where('status', 1)
+                ->first();
+            if ($senderAllocation) {
+                $senderAllocation->decrement('available_bags', $transfer->number_of_bags);
+                $senderAllocation->decrement('allocated_bags', $transfer->number_of_bags);
+            }
 
-            // Update receiver allocation
-            $receiverAllocation = DriverBagsAllocation::firstOrCreate(
-                ['organization_id' => $transfer->organization_id, 'driver_id' => $transfer->to_driver_id],
-                ['allocated_bags' => 0, 'used_bags' => 0, 'available_bags' => 0]
-            );
-            $receiverAllocation->increment('available_bags', $transfer->number_of_bags);
-            $receiverAllocation->increment('allocated_bags', $transfer->number_of_bags);
+            // Update receiver allocation (only active status = 1)
+            $receiverAllocation = DriverBagsAllocation::where('organization_id', $transfer->organization_id)
+                ->where('driver_id', $transfer->to_driver_id)
+                ->where('status', 1)
+                ->first();
+                
+            if ($receiverAllocation) {
+                $receiverAllocation->increment('available_bags', $transfer->number_of_bags);
+                $receiverAllocation->increment('allocated_bags', $transfer->number_of_bags);
+            } else {
+                // Create new active allocation for receiver
+                DriverBagsAllocation::create([
+                    'organization_id' => $transfer->organization_id,
+                    'driver_id' => $transfer->to_driver_id,
+                    'allocated_bags' => $transfer->number_of_bags,
+                    'used_bags' => 0,
+                    'available_bags' => $transfer->number_of_bags,
+                    'bags_from_previous' => 0,
+                    'status' => 1
+                ]);
+            }
 
             // Update transfer status
             $transfer->update([

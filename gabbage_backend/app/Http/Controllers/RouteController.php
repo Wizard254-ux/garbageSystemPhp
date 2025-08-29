@@ -64,8 +64,11 @@ class RouteController extends Controller
                 ];
             });
             
-            // Add client count for this route
-            $route->clients_count = \App\Models\Client::where('route_id', $route->id)->count();
+            // Add active client count for this route
+            $route->clients_count = \App\Models\Client::where('route_id', $route->id)
+                ->whereHas('user', function($q) {
+                    $q->where('isActive', true);
+                })->count();
         });
         
         return response()->json([
@@ -163,9 +166,12 @@ class RouteController extends Controller
             ];
         });
         
-        // Add clients information
+        // Add active clients information only
         $clients = \App\Models\Client::with('user')
             ->where('route_id', $route->id)
+            ->whereHas('user', function($q) {
+                $q->where('isActive', true);
+            })
             ->get();
             
         $route->clients = $clients->map(function ($client) {
